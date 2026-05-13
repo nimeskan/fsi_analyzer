@@ -46,21 +46,20 @@ after the transceiver — Saleae inputs are single-ended.
   - **Linux**: GCC or Clang
   - **macOS**: Xcode / clang
 
-### 1. Get the Saleae Analyzer SDK
+### 1. Get the source
+
+The `AnalyzerSDK/` directory is already bundled in this repository.
+No separate SDK download is needed — just clone this repo:
 
 ```bash
-git clone --recurse-submodules https://github.com/saleae/SampleAnalyzer
+git clone https://github.com/nimeskan/fsi_analyzer
 ```
 
-Copy the `AnalyzerSDK/` subfolder so that `AnalyzerSDK/include/Analyzer.h`
-is reachable from this project, **or** place `AnalyzerSDK/` inside this
-directory. Alternatively, set `ANALYZER_SDK_PATH` in CMakeLists.txt.
-
-### 2. Create the project directory structure
+The project directory structure is:
 
 ```
-FSIAnalyzer/
-├── AnalyzerSDK/          ← from SampleAnalyzer submodule
+fsi_analyzer/
+├── AnalyzerSDK/          ← bundled Saleae SDK
 ├── CMakeLists.txt
 └── src/
     ├── FSIAnalyzer.h
@@ -71,9 +70,7 @@ FSIAnalyzer/
     └── FSIAnalyzerResults.cpp
 ```
 
-Copy each file below into the corresponding path, then build.
-
-### 3. Build
+### 2. Build
 
 **Linux / macOS:**
 
@@ -81,8 +78,8 @@ Copy each file below into the corresponding path, then build.
 mkdir build && cd build
 cmake ..
 cmake --build .
-# Output: build/Analyzers/libFSIAnalyzer.so  (Linux)
-#         build/Analyzers/libFSIAnalyzer.dylib (macOS)
+# Output: build/Analyzers/FSIAnalyzer.so  (Linux)
+#         build/Analyzers/FSIAnalyzer.dylib (macOS)
 ```
 
 **Windows (x64 Developer Command Prompt):**
@@ -94,10 +91,10 @@ cmake --build . --config Release
 :: Output: build\Analyzers\Release\FSIAnalyzer.dll
 ```
 
-### 4. macOS quarantine removal
+### 3. macOS quarantine removal
 
 ```bash
-xattr -d com.apple.quarantine build/Analyzers/libFSIAnalyzer.dylib
+xattr -d com.apple.quarantine build/Analyzers/FSIAnalyzer.dylib
 ```
 
 -----
@@ -143,6 +140,10 @@ Both bits are sampled on the **same** clock edge, giving double throughput.
 |1|**2-lane interleaving wrong** — TXDB ignored entirely                       |`CollectBits()` now reads D0+D1 per edge and interleaves even/odd bits correctly|
 |2|**N-word count hardcoded to 16** — wrong for most applications              |Added UI dropdown (1–16). Value passed to `DataWordCount()` at runtime          |
 |3|**CRC buffer stack overflow** — `U8 crc_buf[34]` overflows on any off-by-one|Changed to `std::vector<U8>` — grows dynamically, no fixed limit                |
+|4|**`UseFramesV2()` typo** — symbol does not exist in the SDK                 |Corrected to `UseFrameV2()`                                                     |
+|5|**`AnalyzerChannelData` incomplete type** — `Analyzer.h` only forward-declares it|Added `#include <AnalyzerChannelData.h>` in `FSIAnalyzer.cpp`              |
+|6|**`FrameTypeName` used before definition** — `WorkerThread()` precedes it in TU|Added forward declaration at top of `FSIAnalyzer.cpp`                       |
+|7|**Linux lib path wrong** — SDK ships `lib_x86_64/` not `lib/`              |`CMakeLists.txt` auto-detects `lib_x86_64/` with fallback to `lib/`            |
 
 Bonus: `SaveSettings()` now stores to `mSavedSettings` (a private member `std::string`) instead of the SDK-inherited `mSettings` variable, fixing a subtle name-shadowing bug.
 
@@ -171,8 +172,15 @@ elseif(WIN32)
     set(SALEAE_LIB "${ANALYZER_SDK_PATH}/lib/Analyzer.lib")
     set(SALEAE_DLL "${ANALYZER_SDK_PATH}/lib/Analyzer.dll")
 else()
-    set(SALEAE_LIB "${ANALYZER_SDK_PATH}/lib/libAnalyzer.so")
+    # SDK ships arch-specific lib dirs
+    if(EXISTS "${ANALYZER_SDK_PATH}/lib_x86_64/libAnalyzer.so")
+        set(SALEAE_LIB "${ANALYZER_SDK_PATH}/lib_x86_64/libAnalyzer.so")
+    else()
+        set(SALEAE_LIB "${ANALYZER_SDK_PATH}/lib/libAnalyzer.so")
+    endif()
 endif()
+
+add_definitions(-DLOGIC2)
 
 add_library(FSIAnalyzer SHARED
     src/FSIAnalyzer.cpp
@@ -738,7 +746,10 @@ extern "C" ANALYZER_EXPORT void        __cdecl DestroyAnalyzer( Analyzer* analyz
 #include "FSIAnalyzerResults.h"
 #include "FSIAnalyzerSettings.h"
 #include <AnalyzerHelpers.h>
+#include <AnalyzerChannelData.h>
 #include <vector>
+
+const char* FrameTypeName( U64 ft );
 
 // ============================================================================
 //  FSI CRC-8
@@ -771,7 +782,7 @@ FSIAnalyzer::FSIAnalyzer()
       mLastClockSample(0), mLastClockState(BIT_LOW)
 {
     SetAnalyzerSettings( &mSettings );
-    UseFramesV2();
+    UseFrameV2();
 }
 
 FSIAnalyzer::~FSIAnalyzer()
@@ -1204,3 +1215,4 @@ void        DestroyAnalyzer( Analyzer* a )  { delete a; }
 - **CRC polynomial** may need adjustment per device revision. If CRC shows BAD on known-good captures, regenerate `kFsiCrcTable[]` using the exact polynomial in your TRM's FSI chapter.
 - **`SyncSpiCompat()`** watches for TXDA falling edges. If your board has pull-up noise during CS deassertion, add a sample count threshold before committing to a frame start.
 - **`GenerateSimulationData()`** returns 0 — no simulated capture is provided. Test against real hardware.
+- **macOS and Windows lib paths** in `CMakeLists.txt` still reference the legacy `lib/` directory. The bundled SDK ships `lib_arm64/` on macOS — update `SALEAE_LIB` accordingly if building on Apple Silicon.
