@@ -1,0 +1,37 @@
+#pragma once
+#include <AnalyzerSettings.h>
+#include <AnalyzerTypes.h>
+
+class FSIAnalyzerSettings : public AnalyzerSettings
+{
+public:
+    FSIAnalyzerSettings();
+    virtual ~FSIAnalyzerSettings();
+
+    virtual bool SetSettingsFromInterfaces();
+    virtual void LoadSettings( const char* settings );
+    virtual const char* SaveSettings();
+
+    void UpdateInterfacesFromSettings();
+
+    // Channels
+    Channel mClockChannel;
+    Channel mDataChannel0;      // TXDA / RXD0
+    Channel mDataChannel1;      // TXDB / RXD1 (optional, 2-lane)
+
+    // Protocol options
+    bool    mTwoLane;           // true = 2-lane DDR interleaved mode
+    U32     mNWordCount;        // word count for N-word frames (1-16)
+    bool    mSpiCompatMode;     // true = SPI-compatible preamble (CS-based)
+
+protected:
+    std::unique_ptr<AnalyzerSettingInterfaceChannel>    mClockChannelInterface;
+    std::unique_ptr<AnalyzerSettingInterfaceChannel>    mDataChannel0Interface;
+    std::unique_ptr<AnalyzerSettingInterfaceChannel>    mDataChannel1Interface;
+    std::unique_ptr<AnalyzerSettingInterfaceBool>       mTwoLaneInterface;
+    std::unique_ptr<AnalyzerSettingInterfaceNumberList> mNWordCountInterface;
+    std::unique_ptr<AnalyzerSettingInterfaceBool>       mSpiCompatModeInterface;
+
+private:
+    std::string mSavedSettings;   // owns the string returned by SaveSettings()
+};
