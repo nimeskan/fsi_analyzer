@@ -90,8 +90,8 @@ Logic 2 loads .so → CreateAnalyzer() → FSIAnalyzer()
 ### 2-lane interleaving (`CollectBits`)
 
 In 2-lane mode, each clock edge delivers two logical bits:
-- TXDA → even-indexed bits (positions 0, 2, 4, …)
-- TXDB → odd-indexed bits (positions 1, 3, 5, …)
+- TXD0 → even-indexed bits (positions 0, 2, 4, …)
+- TXD1 → odd-indexed bits (positions 1, 3, 5, …)
 
 `ceil(count/2)` clock edges are consumed per `CollectBits(count)` call.
 Both bits are shifted into `value` MSB-first in interleaved order.
@@ -211,7 +211,7 @@ No automated tests are currently wired up in this project. To add them:
 
 ### Manual verification workflow
 
-1. Connect TXCLK and TXDA (and TXDB if 2-lane) to a Logic device running
+1. Connect TXCLK and TXD0 (and TXD1 if 2-lane) to a Logic device running
    at ≥ 4× your FSI clock frequency (e.g. 200 MS/s for a 50 MHz FSI clock;
    a Logic 4 at 12 MS/s suffices for FSI clocks up to ~3 MHz).
 3. Load the plugin and add the analyzer to the capture.

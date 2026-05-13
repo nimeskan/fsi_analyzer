@@ -16,8 +16,8 @@ public:
 
     // Channels
     Channel mClockChannel;
-    Channel mDataChannel0;      // TXDA / RXD0
-    Channel mDataChannel1;      // TXDB / RXD1 (optional, 2-lane)
+    Channel mDataChannel0;      // TXD0 / RXD0
+    Channel mDataChannel1;      // TXD1 / RXD1 (optional, 2-lane)
 
     // Protocol options
     bool    mTwoLane;           // true = 2-lane DDR interleaved mode

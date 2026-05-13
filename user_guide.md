@@ -61,8 +61,8 @@ TXCLK period in a Logic 2 timing view before adding the analyzer.
 | FSI signal | Connect to |
 |---|---|
 |TXCLK / RXCLK|Any Logic channel — assign to TXCLK in settings|
-|TXDA / RXD0|Any Logic channel — assign to TXDA/RXD0 in settings|
-|TXDB / RXD1|Any Logic channel — assign to TXDB/RXD1 (2-lane only)|
+|TXD0 / RXD0|Any Logic channel — assign to TXD0/RXD0 in settings|
+|TXD1 / RXD1|Any Logic channel — assign to TXD1/RXD1 (2-lane only)|
 
 If your board uses **LVDS transceivers or digital isolators**, probe the
 **CMOS side** of the transceiver, not the differential pair. Logic inputs
@@ -89,7 +89,7 @@ to a capture.
 
 ## Adding the analyzer to a capture
 
-1. Take a capture that includes TXCLK and at least TXDA.
+1. Take a capture that includes TXCLK and at least TXD0.
 2. In the Analyzers panel, click **+**.
 3. Search for **TI FSI (C2000)** and select it.
 4. Configure the settings (see below) and click **Save**.
@@ -106,11 +106,11 @@ above each channel. On large captures this may take a few seconds.
 | Setting | Description |
 |---|---|
 |**TXCLK / RXCLK**|The FSI clock channel. Required.|
-|**TXDA / RXD0**|FSI data lane 0. Required.|
-|**TXDB / RXD1**|FSI data lane 1. Only needed when 2-Lane Mode is enabled.|
+|**TXD0 / RXD0**|FSI data lane 0. Required.|
+|**TXD1 / RXD1**|FSI data lane 1. Only needed when 2-Lane Mode is enabled.|
 
 Assign each setting to the Logic channel you have wired to the corresponding
-FSI pin. If TXDB / RXD1 is not assigned and 2-Lane Mode is off, it is ignored.
+FSI pin. If TXD1 / RXD1 is not assigned and 2-Lane Mode is off, it is ignored.
 
 ### Protocol options
 
@@ -118,7 +118,7 @@ FSI pin. If TXDB / RXD1 is not assigned and 2-Lane Mode is off, it is ignored.
 
 Enable this when your firmware configures the FSI peripheral for dual-lane
 operation. In 2-lane mode, the peripheral drives two data lines simultaneously:
-TXDA carries even-indexed bits and TXDB carries odd-indexed bits, sampled on
+TXD0 carries even-indexed bits and TXD1 carries odd-indexed bits, sampled on
 the same clock edge. This doubles throughput but requires both lines to be
 probed.
 
@@ -140,7 +140,7 @@ values and likely a CRC failure.
 #### SPI-Compatible Mode
 
 Enable this when your firmware sets `FSI_TX_COMPAT_MODE`. In this mode the
-FSI peripheral signals frame start using a chip-select assertion on TXDA
+FSI peripheral signals frame start using a chip-select assertion on TXD0
 instead of the normal flush + SOF preamble. The rest of the frame structure
 (header, data words, CRC, EOF) is identical.
 
@@ -228,7 +228,7 @@ rate.
 
 ### Data words look wrong / values seem shifted
 
-- In 2-lane mode, confirm both TXDA and TXDB are assigned to the correct
+- In 2-lane mode, confirm both TXD0 and TXD1 are assigned to the correct
   channels. Swapping them produces incorrect interleaving.
 - In 1-lane mode, confirm 2-Lane Mode is **off**.
 - For N-word frames, confirm the N-Word Frame Count setting matches firmware.
@@ -267,5 +267,5 @@ rate.
   pairs is not supported by Saleae hardware.
 
 - **SPI-Compatible Mode CS noise.** In SPI-compat mode the analyzer triggers
-  on any falling edge of TXDA. Pull-up noise during CS deassertion could
+  on any falling edge of TXD0. Pull-up noise during CS deassertion could
   cause a spurious frame start to be detected.

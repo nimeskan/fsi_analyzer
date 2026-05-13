@@ -45,12 +45,12 @@ public:
 
 protected:
     // Advance to next DDR clock edge.
-    // In 1-lane: lane0_bit is the bit on TXDA.
-    // In 2-lane: lane0_bit = TXDA (even bit), lane1_bit = TXDB (odd bit).
+    // In 1-lane: lane0_bit is the bit on TXD0.
+    // In 2-lane: lane0_bit = TXD0 (even bit), lane1_bit = TXD1 (odd bit).
     void AdvanceToNextClockEdge( BitState& lane0_bit, BitState& lane1_bit );
 
     // Collect 'count' logical bits into a value (MSB first).
-    // 1-lane: reads 'count' DDR edges from TXDA only.
+    // 1-lane: reads 'count' DDR edges from TXD0 only.
     // 2-lane: reads ceil(count/2) edges; each edge delivers D0 (even) + D1 (odd).
     bool CollectBits( U32 count, U64& value,
                       U64& start_sample, U64& end_sample );
@@ -62,7 +62,7 @@ protected:
     // Detect flush+SOF preamble (normal FSI mode).
     bool SyncPreamble( U64& frame_start_sample );
 
-    // Detect SPI-compatible frame start (CS assertion = TXDA going LOW).
+    // Detect SPI-compatible frame start (CS assertion = TXD0 going LOW).
     bool SyncSpiCompat( U64& frame_start_sample );
 
     // Compute FSI CRC-8 over a byte vector.

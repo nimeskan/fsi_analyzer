@@ -14,20 +14,20 @@ FSIAnalyzerSettings::FSIAnalyzerSettings()
     mClockChannelInterface->SetChannel( mClockChannel );
 
     mDataChannel0Interface.reset( new AnalyzerSettingInterfaceChannel() );
-    mDataChannel0Interface->SetTitleAndTooltip( "TXDA / RXD0",
+    mDataChannel0Interface->SetTitleAndTooltip( "TXD0 / RXD0",
         "FSI data lane 0 - always required" );
     mDataChannel0Interface->SetChannel( mDataChannel0 );
 
     mDataChannel1Interface.reset( new AnalyzerSettingInterfaceChannel() );
-    mDataChannel1Interface->SetTitleAndTooltip( "TXDB / RXD1 (2-lane only)",
+    mDataChannel1Interface->SetTitleAndTooltip( "TXD1 / RXD1 (2-lane only)",
         "FSI data lane 1 - only needed in 2-lane mode" );
     mDataChannel1Interface->SetChannel( mDataChannel1 );
     mDataChannel1Interface->SetSelectionOfNoneIsAllowed( true );
 
     mTwoLaneInterface.reset( new AnalyzerSettingInterfaceBool() );
     mTwoLaneInterface->SetTitleAndTooltip( "2-Lane Mode",
-        "Enable dual-lane capture (TXDA + TXDB). "
-        "Even-numbered bits arrive on TXDA, odd-numbered bits on TXDB." );
+        "Enable dual-lane capture (TXD0 + TXD1). "
+        "Even-numbered bits arrive on TXD0, odd-numbered bits on TXD1." );
     mTwoLaneInterface->SetValue( mTwoLane );
 
     mNWordCountInterface.reset( new AnalyzerSettingInterfaceNumberList() );
@@ -63,8 +63,8 @@ FSIAnalyzerSettings::FSIAnalyzerSettings()
 
     ClearChannels();
     AddChannel( mClockChannel,  "TXCLK",     false );
-    AddChannel( mDataChannel0,  "TXDA/RXD0", false );
-    AddChannel( mDataChannel1,  "TXDB/RXD1", false );
+    AddChannel( mDataChannel0,  "TXD0/RXD0", false );
+    AddChannel( mDataChannel1,  "TXD1/RXD1", false );
 }
 
 FSIAnalyzerSettings::~FSIAnalyzerSettings() {}
@@ -85,12 +85,12 @@ bool FSIAnalyzerSettings::SetSettingsFromInterfaces()
     }
     if( mDataChannel0 == UNDEFINED_CHANNEL )
     {
-        SetErrorText( "Please select the TXDA/RXD0 data channel." );
+        SetErrorText( "Please select the TXD0/RXD0 data channel." );
         return false;
     }
     if( mTwoLane && mDataChannel1 == UNDEFINED_CHANNEL )
     {
-        SetErrorText( "2-lane mode is enabled but TXDB/RXD1 channel is not assigned." );
+        SetErrorText( "2-lane mode is enabled but TXD1/RXD1 channel is not assigned." );
         return false;
     }
     if( mNWordCount < 1 || mNWordCount > 16 )
@@ -101,9 +101,9 @@ bool FSIAnalyzerSettings::SetSettingsFromInterfaces()
 
     ClearChannels();
     AddChannel( mClockChannel,  "TXCLK",     true );
-    AddChannel( mDataChannel0,  "TXDA/RXD0", true );
+    AddChannel( mDataChannel0,  "TXD0/RXD0", true );
     if( mTwoLane )
-        AddChannel( mDataChannel1, "TXDB/RXD1", true );
+        AddChannel( mDataChannel1, "TXD1/RXD1", true );
 
     return true;
 }
@@ -131,9 +131,9 @@ void FSIAnalyzerSettings::LoadSettings( const char* settings )
 
     ClearChannels();
     AddChannel( mClockChannel,  "TXCLK",     true );
-    AddChannel( mDataChannel0,  "TXDA/RXD0", true );
+    AddChannel( mDataChannel0,  "TXD0/RXD0", true );
     if( mTwoLane )
-        AddChannel( mDataChannel1, "TXDB/RXD1", true );
+        AddChannel( mDataChannel1, "TXD1/RXD1", true );
 
     UpdateInterfacesFromSettings();
 }

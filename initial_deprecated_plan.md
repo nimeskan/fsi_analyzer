@@ -24,8 +24,8 @@ MCUs (F280049, F2838x, F28003x, etc.) in Saleae **Logic 2**.
 |FSI signal|Saleae input                                      |
 |----------|--------------------------------------------------|
 |TXCLK     |Any channel (set as "TXCLK")                      |
-|TXDA      |Any channel (set as "TXDA/RXD0")                  |
-|TXDB      |Any channel (set as "TXDB/RXD1", 2-lane mode only)|
+|TXD0      |Any channel (set as "TXD0/RXD0")                  |
+|TXD1      |Any channel (set as "TXD1/RXD1", 2-lane mode only)|
 
 **Important:** FSI runs up to 50 MHz clock (DDR → 100 Mbps on 1 lane).
 Use **Logic Pro 8** or **Logic Pro 16** at ≥ 200 MS/s.
@@ -106,8 +106,8 @@ xattr -d com.apple.quarantine build/Analyzers/FSIAnalyzer.dylib
 1. Add the path to the `build/Analyzers/` directory
 1. **Restart Logic 2**
 1. In a capture, click **Analyzers → +** and search for **TI FSI (C2000)**
-1. Assign channels: TXCLK, TXDA, and optionally TXDB
-1. Enable **2-Lane Mode** if using both TXDA and TXDB
+1. Assign channels: TXCLK, TXD0, and optionally TXD1
+1. Enable **2-Lane Mode** if using both TXD0 and TXD1
 
 -----
 
@@ -116,8 +116,8 @@ xattr -d com.apple.quarantine build/Analyzers/FSIAnalyzer.dylib
 |Setting            |Description                                                                                                                 |
 |-------------------|----------------------------------------------------------------------------------------------------------------------------|
 |TXCLK/RXCLK        |Clock channel                                                                                                               |
-|TXDA/RXD0          |Data lane 0 (required)                                                                                                      |
-|TXDB/RXD1          |Data lane 1 (optional, 2-lane mode only)                                                                                    |
+|TXD0/RXD0          |Data lane 0 (required)                                                                                                      |
+|TXD1/RXD1          |Data lane 1 (optional, 2-lane mode only)                                                                                    |
 |2-Lane Mode        |Enable dual-lane DDR interleaved capture                                                                                    |
 |N-Word Frame Count |Number of words in N-word frames (1–16). Must match `FSI_TX_FRAME_CTRL.N_WORDS` in firmware. No effect on fixed-size frames.|
 |SPI-Compatible Mode|Enable when `FSI_TX_COMPAT_MODE` is set in firmware. Replaces flush+SOF with SPI CS assertion.                              |
@@ -126,8 +126,8 @@ xattr -d com.apple.quarantine build/Analyzers/FSIAnalyzer.dylib
 
 In 2-lane mode the FSI peripheral transmits two bits per clock edge:
 
-- **TXDA** carries even-indexed bits (bit positions 0, 2, 4 … counting from MSB)
-- **TXDB** carries odd-indexed bits (bit positions 1, 3, 5 …)
+- **TXD0** carries even-indexed bits (bit positions 0, 2, 4 … counting from MSB)
+- **TXD1** carries odd-indexed bits (bit positions 1, 3, 5 …)
 
 Both bits are sampled on the **same** clock edge, giving double throughput.
 
@@ -137,7 +137,7 @@ Both bits are sampled on the **same** clock edge, giving double throughput.
 
 |#|Issue                                                                       |Fix                                                                             |
 |-|----------------------------------------------------------------------------|--------------------------------------------------------------------------------|
-|1|**2-lane interleaving wrong** — TXDB ignored entirely                       |`CollectBits()` now reads D0+D1 per edge and interleaves even/odd bits correctly|
+|1|**2-lane interleaving wrong** — TXD1 ignored entirely                       |`CollectBits()` now reads D0+D1 per edge and interleaves even/odd bits correctly|
 |2|**N-word count hardcoded to 16** — wrong for most applications              |Added UI dropdown (1–16). Value passed to `DataWordCount()` at runtime          |
 |3|**CRC buffer stack overflow** — `U8 crc_buf[34]` overflows on any off-by-one|Changed to `std::vector<U8>` — grows dynamically, no fixed limit                |
 |4|**`UseFramesV2()` typo** — symbol does not exist in the SDK                 |Corrected to `UseFrameV2()`                                                     |
@@ -234,8 +234,8 @@ public:
 
     // Channels
     Channel mClockChannel;
-    Channel mDataChannel0;      // TXDA / RXD0
-    Channel mDataChannel1;      // TXDB / RXD1 (optional, 2-lane)
+    Channel mDataChannel0;      // TXD0 / RXD0
+    Channel mDataChannel1;      // TXD1 / RXD1 (optional, 2-lane)
 
     // Protocol options
     bool    mTwoLane;           // true = 2-lane DDR interleaved mode
@@ -276,20 +276,20 @@ FSIAnalyzerSettings::FSIAnalyzerSettings()
     mClockChannelInterface->SetChannel( mClockChannel );
 
     mDataChannel0Interface.reset( new AnalyzerSettingInterfaceChannel() );
-    mDataChannel0Interface->SetTitleAndTooltip( "TXDA / RXD0",
+    mDataChannel0Interface->SetTitleAndTooltip( "TXD0 / RXD0",
         "FSI data lane 0 - always required" );
     mDataChannel0Interface->SetChannel( mDataChannel0 );
 
     mDataChannel1Interface.reset( new AnalyzerSettingInterfaceChannel() );
-    mDataChannel1Interface->SetTitleAndTooltip( "TXDB / RXD1 (2-lane only)",
+    mDataChannel1Interface->SetTitleAndTooltip( "TXD1 / RXD1 (2-lane only)",
         "FSI data lane 1 - only needed in 2-lane mode" );
     mDataChannel1Interface->SetChannel( mDataChannel1 );
     mDataChannel1Interface->SetSelectionOfNoneIsAllowed( true );
 
     mTwoLaneInterface.reset( new AnalyzerSettingInterfaceBool() );
     mTwoLaneInterface->SetTitleAndTooltip( "2-Lane Mode",
-        "Enable dual-lane capture (TXDA + TXDB). "
-        "Even-numbered bits arrive on TXDA, odd-numbered bits on TXDB." );
+        "Enable dual-lane capture (TXD0 + TXD1). "
+        "Even-numbered bits arrive on TXD0, odd-numbered bits on TXD1." );
     mTwoLaneInterface->SetValue( mTwoLane );
 
     mNWordCountInterface.reset( new AnalyzerSettingInterfaceNumberList() );
@@ -325,8 +325,8 @@ FSIAnalyzerSettings::FSIAnalyzerSettings()
 
     ClearChannels();
     AddChannel( mClockChannel,  "TXCLK",     false );
-    AddChannel( mDataChannel0,  "TXDA/RXD0", false );
-    AddChannel( mDataChannel1,  "TXDB/RXD1", false );
+    AddChannel( mDataChannel0,  "TXD0/RXD0", false );
+    AddChannel( mDataChannel1,  "TXD1/RXD1", false );
 }
 
 FSIAnalyzerSettings::~FSIAnalyzerSettings() {}
@@ -347,12 +347,12 @@ bool FSIAnalyzerSettings::SetSettingsFromInterfaces()
     }
     if( mDataChannel0 == UNDEFINED_CHANNEL )
     {
-        SetErrorText( "Please select the TXDA/RXD0 data channel." );
+        SetErrorText( "Please select the TXD0/RXD0 data channel." );
         return false;
     }
     if( mTwoLane && mDataChannel1 == UNDEFINED_CHANNEL )
     {
-        SetErrorText( "2-lane mode is enabled but TXDB/RXD1 channel is not assigned." );
+        SetErrorText( "2-lane mode is enabled but TXD1/RXD1 channel is not assigned." );
         return false;
     }
     if( mNWordCount < 1 || mNWordCount > 16 )
@@ -363,9 +363,9 @@ bool FSIAnalyzerSettings::SetSettingsFromInterfaces()
 
     ClearChannels();
     AddChannel( mClockChannel,  "TXCLK",     true );
-    AddChannel( mDataChannel0,  "TXDA/RXD0", true );
+    AddChannel( mDataChannel0,  "TXD0/RXD0", true );
     if( mTwoLane )
-        AddChannel( mDataChannel1, "TXDB/RXD1", true );
+        AddChannel( mDataChannel1, "TXD1/RXD1", true );
 
     return true;
 }
@@ -393,9 +393,9 @@ void FSIAnalyzerSettings::LoadSettings( const char* settings )
 
     ClearChannels();
     AddChannel( mClockChannel,  "TXCLK",     true );
-    AddChannel( mDataChannel0,  "TXDA/RXD0", true );
+    AddChannel( mDataChannel0,  "TXD0/RXD0", true );
     if( mTwoLane )
-        AddChannel( mDataChannel1, "TXDB/RXD1", true );
+        AddChannel( mDataChannel1, "TXD1/RXD1", true );
 
     UpdateInterfacesFromSettings();
 }
@@ -694,12 +694,12 @@ public:
 
 protected:
     // Advance to next DDR clock edge.
-    // In 1-lane: lane0_bit is the bit on TXDA.
-    // In 2-lane: lane0_bit = TXDA (even bit), lane1_bit = TXDB (odd bit).
+    // In 1-lane: lane0_bit is the bit on TXD0.
+    // In 2-lane: lane0_bit = TXD0 (even bit), lane1_bit = TXD1 (odd bit).
     void AdvanceToNextClockEdge( BitState& lane0_bit, BitState& lane1_bit );
 
     // Collect 'count' logical bits into a value (MSB first).
-    // 1-lane: reads 'count' DDR edges from TXDA only.
+    // 1-lane: reads 'count' DDR edges from TXD0 only.
     // 2-lane: reads ceil(count/2) edges; each edge delivers D0 (even) + D1 (odd).
     bool CollectBits( U32 count, U64& value,
                       U64& start_sample, U64& end_sample );
@@ -711,7 +711,7 @@ protected:
     // Detect flush+SOF preamble (normal FSI mode).
     bool SyncPreamble( U64& frame_start_sample );
 
-    // Detect SPI-compatible frame start (CS assertion = TXDA going LOW).
+    // Detect SPI-compatible frame start (CS assertion = TXD0 going LOW).
     bool SyncSpiCompat( U64& frame_start_sample );
 
     // Compute FSI CRC-8 over a byte vector.
@@ -1213,6 +1213,6 @@ void        DestroyAnalyzer( Analyzer* a )  { delete a; }
 
 - **N-word frame actual count** is set via the UI dropdown — you must match it to `FSI_TX_FRAME_CTRL.N_WORDS` in your firmware. It cannot be inferred from the wire.
 - **CRC polynomial** may need adjustment per device revision. If CRC shows BAD on known-good captures, regenerate `kFsiCrcTable[]` using the exact polynomial in your TRM's FSI chapter.
-- **`SyncSpiCompat()`** watches for TXDA falling edges. If your board has pull-up noise during CS deassertion, add a sample count threshold before committing to a frame start.
+- **`SyncSpiCompat()`** watches for TXD0 falling edges. If your board has pull-up noise during CS deassertion, add a sample count threshold before committing to a frame start.
 - **`GenerateSimulationData()`** returns 0 — no simulated capture is provided. Test against real hardware.
 - **macOS and Windows lib paths** in `CMakeLists.txt` still reference the legacy `lib/` directory. The bundled SDK ships `lib_arm64/` on macOS — update `SALEAE_LIB` accordingly if building on Apple Silicon.
