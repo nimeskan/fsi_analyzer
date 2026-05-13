@@ -31,15 +31,30 @@ or spreadsheet work is needed.
 
 ### Logic analyzer
 
-| Hardware | Supported |
-|---|---|
-|Logic Pro 8|Yes — recommended minimum|
-|Logic Pro 16|Yes|
-|Logic 4|No — insufficient bandwidth|
+All Saleae devices are potentially usable. The required sample rate depends
+on how fast your FSI clock is configured — FSI does not have to run at its
+maximum speed.
 
-Capture at **≥ 200 MS/s**. FSI clocks up to 50 MHz with DDR encoding,
-giving up to 100 Mbps per data lane. The Logic 4's maximum sample rate is
-not sufficient to resolve FSI edges reliably.
+The analyzer enforces a hard minimum of **4 MS/s** (set by
+`GetMinimumSampleRateHz()`). In practice, reliable edge detection needs
+roughly **4–8× oversampling** of the FSI clock. Use the table below to
+find the maximum FSI clock speed each device can handle:
+
+| Device | Max digital sample rate | Max FSI clock (4× rule) |
+|---|---|---|
+|Logic 4|12 MS/s (all 4 channels)|~3 MHz|
+|Logic 8|24 MS/s|~6 MHz|
+|Logic Pro 8|500 MS/s|up to 50 MHz (FSI hardware max)|
+|Logic Pro 16|500 MS/s|up to 50 MHz (FSI hardware max)|
+
+**Examples:**
+- FSI at 1 MHz clock → any device works at its default sample rate.
+- FSI at 10 MHz clock → Logic Pro 8/16 required (needs ≥ 40 MS/s).
+- FSI at 50 MHz clock → Logic Pro 8/16 at ≥ 200 MS/s recommended.
+
+If you are unsure of your FSI clock frequency, check
+`FSI_TX_CLKDIV` / `FSI_TX_PRESCALE` in your firmware or measure the
+TXCLK period in a Logic 2 timing view before adding the analyzer.
 
 ### Probing
 

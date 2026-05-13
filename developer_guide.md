@@ -211,8 +211,9 @@ No automated tests are currently wired up in this project. To add them:
 
 ### Manual verification workflow
 
-1. Connect TXCLK and TXDA (and TXDB if 2-lane) to a Logic Pro 8/16.
-2. Capture at ≥ 200 MS/s.
+1. Connect TXCLK and TXDA (and TXDB if 2-lane) to a Logic device running
+   at ≥ 4× your FSI clock frequency (e.g. 200 MS/s for a 50 MHz FSI clock;
+   a Logic 4 at 12 MS/s suffices for FSI clocks up to ~3 MHz).
 3. Load the plugin and add the analyzer to the capture.
 4. Inspect bubble labels: each FSI field should appear as a labelled segment.
 5. Check that CRC bubbles show **OK** on valid frames.
