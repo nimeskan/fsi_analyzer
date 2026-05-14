@@ -439,7 +439,7 @@ void FSIAnalyzer::WorkerThread()
 }
 
 U32  FSIAnalyzer::GetMinimumSampleRateHz() { return 4000000; }
-const char* FSIAnalyzer::GetAnalyzerName() const { return "TI FSI (C2000)"; }
+const char* FSIAnalyzer::GetAnalyzerName() const { return "TI FSI"; }
 bool FSIAnalyzer::NeedsRerun() { return false; }
 U32  FSIAnalyzer::GenerateSimulationData( U64, U32, SimulationChannelDescriptor** ) { return 0; }
 
@@ -458,6 +458,6 @@ const char* FrameTypeName( U64 ft )
     }
 }
 
-const char* GetAnalyzerName()               { return "TI FSI (C2000)"; }
+const char* GetAnalyzerName()               { return "TI FSI"; }
 Analyzer*   CreateAnalyzer()                { return new FSIAnalyzer(); }
 void        DestroyAnalyzer( Analyzer* a )  { delete a; }

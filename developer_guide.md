@@ -3,8 +3,8 @@
 ## Overview
 
 This is a Saleae Logic 2 Low-Level Analyzer (LLA) plugin that decodes Texas
-Instruments Fast Serial Interface (FSI) frames from C2000 MCUs. It is written
-in C++14 and built as a shared library loaded by Logic 2 at runtime.
+Instruments Fast Serial Interface (FSI) frames. It is written in C++14 and
+built as a shared library loaded by Logic 2 at runtime.
 
 -----
 
@@ -183,7 +183,7 @@ in `AnalyzerResults.h`. Removing it will cause a build failure.
 4. Click **+** and add the path to `build/Analyzers/`.
 5. **Restart Logic 2** — the directory is only scanned at startup.
 6. In a capture session, click **Analyzers → +** and search for
-   **TI FSI (C2000)**.
+   **TI FSI**.
 
 To update after a recompile, Logic 2 must be restarted. There is no hot-reload
 mechanism for LLA plugins.
@@ -250,8 +250,6 @@ No automated tests are currently wired up in this project. To add them:
 - **macOS / Windows lib paths** in `CMakeLists.txt` still reference the legacy
   `lib/` directory rather than the arch-specific subdirectories that the
   bundled SDK actually uses.
-- **CRC polynomial** is hardcoded for the standard FSI CRC-8 (0x4D). Some
-  C2000 device revisions or configurations may use a different polynomial —
-  verify against your TRM if CRC shows BAD on known-good captures.
+- **No automated tests.** See Testing section above.
 - **N-word count** cannot be inferred from the wire. The UI dropdown must be
   set to match `FSI_TX_FRAME_CTRL.N_WORDS` in firmware.
