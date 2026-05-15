@@ -246,7 +246,7 @@ rate.
   `DATA(Nw)` frame cannot be determined from the wire — it must match the
   firmware configuration exactly.
 
-- **CRC is standard FSI CRC-8** (polynomial 0x4D, seed 0x00). This is the same on all FSI-capable TI devices.
+- **CRC is standard FSI CRC-8** (polynomial 0x07, seed 0x00). This is the same on all FSI-capable TI devices.
 
 - **No simulated waveform.** Logic 2's built-in simulation mode is not
   supported. The analyzer must be used with real captured data.

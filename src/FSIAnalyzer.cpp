@@ -9,7 +9,7 @@ const char* FrameTypeName( U64 ft );
 
 // ============================================================================
 //  FSI CRC-8
-//  Polynomial: x^8 + x^6 + x^3 + x^2 + 1 (0x4D)
+//  Polynomial: x^8 + x^2 + x + 1 (0x07)
 //  Seed = 0x00, no final XOR.
 // ============================================================================
 static const U8 kFsiCrcTable[256] = {
@@ -334,10 +334,11 @@ void FSIAnalyzer::WorkerThread()
         U8 user_data  = ( hdr_val       ) & 0xFF;
 
         // CRC buffer — vector, no fixed-size limit
+        // TRM: CRC covers User Data byte first, then data words LSB-first.
+        // Frame Type and Tag bytes are NOT included.
         std::vector<U8> crc_buf;
-        crc_buf.reserve( 2 + mNWordCount * 2 );
-        crc_buf.push_back( (U8)( hdr_val >> 8 ) );
-        crc_buf.push_back( (U8)( hdr_val      ) );
+        crc_buf.reserve( 1 + mNWordCount * 2 );
+        crc_buf.push_back( user_data );
 
         U64 hdr_span = hdr_end - hdr_start;
         U64 quarter  = hdr_span / 4;
@@ -383,8 +384,8 @@ void FSIAnalyzer::WorkerThread()
         {
             U64 word_val, ws, we;
             CollectBits( 16, word_val, ws, we );
+            crc_buf.push_back( (U8)( word_val      ) );   // LSB first per TRM
             crc_buf.push_back( (U8)( word_val >> 8 ) );
-            crc_buf.push_back( (U8)( word_val      ) );
 
             Frame f;
             f.mStartingSampleInclusive = ws; f.mEndingSampleInclusive = we;
