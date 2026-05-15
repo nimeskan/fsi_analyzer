@@ -1,0 +1,10 @@
+^C:\USERS\A0225962\ONEDRIVE - TEXAS INSTRUMENTS\DOCUMENTS\ASM\GIT\FSI_ANALYZER\BUILD\CMAKEFILES\94BFDC67B380A59DF7401DFEB8860697\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" "-SC:/Users/a0225962/OneDrive - TEXAS INSTRUMENTS/Documents/ASM/GIT/fsi_analyzer" "-BC:/Users/a0225962/OneDrive - TEXAS INSTRUMENTS/Documents/ASM/GIT/fsi_analyzer/build" --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file "C:/Users/a0225962/OneDrive - TEXAS INSTRUMENTS/Documents/ASM/GIT/fsi_analyzer/build/FSIAnalyzer.slnx"
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

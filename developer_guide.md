@@ -179,7 +179,7 @@ in `AnalyzerResults.h`. Removing it will cause a build failure.
 
 1. Build the plugin (see above).
 2. Open **Logic 2**.
-3. Go to **Preferences → Custom Low Level Analyzers**.
+3. Go to **Edit → Settings** and scroll to **Custom Low Level Analyzers**.
 4. Click **+** and add the path to `build/Analyzers/`.
 5. **Restart Logic 2** — the directory is only scanned at startup.
 6. In a capture session, click **Analyzers → +** and search for

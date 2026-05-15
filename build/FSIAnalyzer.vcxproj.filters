@@ -1,0 +1,22 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="18.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="C:\Users\a0225962\OneDrive - TEXAS INSTRUMENTS\Documents\ASM\GIT\fsi_analyzer\src\FSIAnalyzer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\a0225962\OneDrive - TEXAS INSTRUMENTS\Documents\ASM\GIT\fsi_analyzer\src\FSIAnalyzerSettings.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\a0225962\OneDrive - TEXAS INSTRUMENTS\Documents\ASM\GIT\fsi_analyzer\src\FSIAnalyzerResults.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\a0225962\OneDrive - TEXAS INSTRUMENTS\Documents\ASM\GIT\fsi_analyzer\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{58404C12-4734-303D-8433-03FD117B196A}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

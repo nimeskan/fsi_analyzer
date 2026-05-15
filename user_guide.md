@@ -78,7 +78,7 @@ Ground the Logic ground clip to the board ground close to the FSI device.
    or `FSIAnalyzer.dll` (Windows). See the developer guide for build
    instructions if you need to compile from source.
 2. Open **Logic 2**.
-3. Go to **Preferences → Custom Low Level Analyzers**.
+3. Go to **Edit → Settings** and scroll to **Custom Low Level Analyzers**.
 4. Click **+** and point it at the folder containing the plugin file.
 5. **Restart Logic 2**.
 
@@ -232,7 +232,7 @@ rate.
 ### Logic 2 does not show the analyzer in the list
 
 - Confirm the plugin file is in the folder registered under
-  **Preferences → Custom Low Level Analyzers**.
+  **Edit → Settings → Custom Low Level Analyzers**.
 - Logic 2 must be **restarted** after adding a new plugin folder or replacing
   the plugin file.
 - On macOS, run the quarantine removal command:
