@@ -98,11 +98,12 @@ Both bits are shifted into `value` MSB-first in interleaved order.
 
 ### CRC
 
-FSI uses CRC-8, polynomial `x^8 + x^6 + x^3 + x^2 + 1` (0x4D), seed 0x00,
+FSI uses CRC-8, polynomial `x^8 + x^2 + x + 1` (0x07), seed 0x00,
 no final XOR. The lookup table `kFsiCrcTable[256]` in `FSIAnalyzer.cpp`
-implements this. The CRC covers the header byte pair and all data word bytes
-(big-endian, high byte first per word). `mData2` on the CRC frame holds the
-computed expected value for debugging.
+implements this. The CRC covers the User Data byte only from the header
+(Frame Type and Tag are excluded), followed by each data word little-endian
+(LSB first, then MSB). `mData2` on the CRC frame holds the computed expected
+value for debugging.
 
 -----
 
