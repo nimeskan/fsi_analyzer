@@ -226,20 +226,23 @@ bool FSIAnalyzer::SyncPreamble( U64& frame_start_sample )
                     if( b3 == BIT_HIGH )
                     {
                         // SOF = 1001 confirmed.
-                        // Preamble started 4 edges before SOF[0].
-                        // SOF[0] is the last HIGH we stored: s_ring[(r-1)%5].
-                        // Four edges before that: s_ring[(r-5)%5] = s_ring[r%5].
+                        // Preamble = the 4 HIGH edges before SOF[0].
+                        // SOF[0] is the last HIGH stored: s_ring[(r-1)%5].
+                        // Preamble starts 4 edges before that:  s_ring[(r-5)%5] = s_ring[r%5].
+                        // Preamble bubble ends at SOF[0] (last HIGH).
+                        // SOF[1,2,3] are consumed silently — no bubble.
                         U64 pre_start = ( r >= 5 ) ? s_ring[ r % 5 ] : s_ring[ 0 ];
+                        U64 pre_end   = s_ring[ ( r - 1 + 5 ) % 5 ];   // SOF[0] sample
 
                         Frame pf;
                         pf.mStartingSampleInclusive = pre_start;
-                        pf.mEndingSampleInclusive   = s3;
+                        pf.mEndingSampleInclusive   = pre_end;
                         pf.mType  = FSI_RESULT_PREAMBLE;
                         pf.mData1 = 0; pf.mData2 = 0; pf.mFlags = 0;
                         mResults->AddFrame( pf );
 
                         FrameV2 fv2;
-                        mResults->AddFrameV2( fv2, "preamble", pre_start, s3 );
+                        mResults->AddFrameV2( fv2, "preamble", pre_start, pre_end );
 
                         frame_start_sample = s3;
                         return true;

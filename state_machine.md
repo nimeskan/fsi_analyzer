@@ -278,29 +278,43 @@ the edge immediately after whichever bit caused the mismatch.
 
 ### 4d — Preamble bubble emission and return
 
-When all three SOF checks pass, the preamble bubble is placed. The ring
-buffer gives the exact sample number of the preamble start (4 edges before
-SOF[0]):
+When all three SOF checks pass, the preamble bubble is placed. Two ring
+buffer entries are used:
 
 ```cpp
                         U64 pre_start = ( r >= 5 ) ? s_ring[ r % 5 ] : s_ring[ 0 ];
+                        U64 pre_end   = s_ring[ ( r - 1 + 5 ) % 5 ];   // SOF[0] sample
 
                         Frame pf;
                         pf.mStartingSampleInclusive = pre_start;
-                        pf.mEndingSampleInclusive   = s3;      // last sample of SOF[3]
+                        pf.mEndingSampleInclusive   = pre_end;
                         pf.mType  = FSI_RESULT_PREAMBLE;
                         pf.mData1 = 0; pf.mData2 = 0; pf.mFlags = 0;
                         mResults->AddFrame( pf );
 
                         FrameV2 fv2;
-                        mResults->AddFrameV2( fv2, "preamble", pre_start, s3 );
+                        mResults->AddFrameV2( fv2, "preamble", pre_start, pre_end );
 
                         frame_start_sample = s3;
                         return true;
 ```
 
-The bubble spans from the first preamble edge to the last SOF edge. The
-bubble text rendered by `FSIAnalyzerResults` is:
+- `pre_start = s_ring[r % 5]` — the ring slot written 5 HIGHs ago, which is
+  preamble bit 1 (the first of the four preamble HIGH edges).
+- `pre_end = s_ring[(r-1+5) % 5]` — the ring slot written 1 HIGH ago, which
+  is SOF[0] (the HIGH that opens the SOF pattern and is visually
+  indistinguishable from the preamble on the wire).
+
+The bubble therefore covers exactly the 4 preamble HIGHs + SOF[0].
+SOF[1,2,3] (`0`, `0`, `1`) were already consumed during the peek and are
+silently discarded — they appear as unlabeled bits between the PRE bubble
+and the FT bubble in the Logic 2 waveform view.
+
+`frame_start_sample = s3` (the SOF[3] sample) is returned to the caller
+so `WorkerThread` has a precise sample reference for the frame start, but
+this sample is not part of the preamble bubble.
+
+The bubble text rendered by `FSIAnalyzerResults` is:
 
 ```cpp
 // FSIAnalyzerResults.cpp:31
