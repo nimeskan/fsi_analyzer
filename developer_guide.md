@@ -47,9 +47,9 @@ The plugin follows the Saleae LLA pattern: three classes derived from SDK
 base classes, plus four C-linkage entry points.
 
 ```
-Analyzer2  ←  FSIAnalyzer          (WorkerThread: parse bits → emit frames)
-AnalyzerSettings ← FSIAnalyzerSettings  (UI: channel pickers, dropdowns)
-AnalyzerResults  ← FSIAnalyzerResults   (render frames as text / CSV)
+Analyzer2        ←  FSIAnalyzer          (WorkerThread: parse bits → emit frames)
+AnalyzerSettings ←  FSIAnalyzerSettings  (UI: channel pickers, dropdowns)
+AnalyzerResults  ←  FSIAnalyzerResults   (render frames as text / CSV)
 ```
 
 ### Key call flow
@@ -58,51 +58,98 @@ AnalyzerResults  ← FSIAnalyzerResults   (render frames as text / CSV)
 Logic 2 loads .so → CreateAnalyzer() → FSIAnalyzer()
                   → SetupResults()
                   → WorkerThread() [runs on background thread]
-                       SyncPreamble()
-                       CollectBits(16) → header: frame_type, tag, user_data
-                       CollectBits(16) × N → data words
-                       CollectBits(8)  → CRC, verified against ComputeCRC()
-                       CollectBits(4)  → EOF pattern (0x9)
+                       SyncPreamble()           — scan for ≥5 HIGH bits + SOF (1001)
+                       CollectBits(4, false)    — Frame Type (control field)
+                       [data frames only:]
+                         CollectBits(8, true)   — User Data (interleaved)
+                         CollectBits(16, true) × N — Data Words (interleaved)
+                         CollectBits(8, true)   — CRC (interleaved)
+                       CollectBits(4, false)    — Frame Tag (control field)
+                       CollectBits(4, false)    — EOF pattern (control field)
+                       CollectBits(4, false)    — Postamble (consumed silently)
                        mResults->AddFrame() + AddFrameV2() per field
                        mResults->CommitResults()
 ```
+
+### FSI frame structure (TRM Table 31-4 / §31.3.4.1)
+
+```
+Idle        : data HIGH (indefinite)
+Preamble    : 4 clock edges, data HIGH  (= 1111)
+SOF         : 4 bits = 1001
+Frame Type  : 4 bits  [control field]
+[data frames only]
+  User Data : 8 bits  [interleaved in 2-lane]
+  Data Words: N×16b   [interleaved in 2-lane]
+  CRC       : 8 bits  [interleaved in 2-lane]
+Frame Tag   : 4 bits  [control field]
+EOF         : 4 bits = 0110  [control field]
+Postamble   : 4 clock edges, data HIGH  (= 1111)
+Idle        : data HIGH
+```
+
+### Frame type codes (TRM Table 31-5)
+
+| Constant | Value (binary) | Frame type |
+|---|---|---|
+|`FSI_FRAME_TYPE_PING` |0000|PING — heartbeat, no data|
+|`FSI_FRAME_TYPE_NWORD`|0011|DATA(Nw) — N data words|
+|`FSI_FRAME_TYPE_DATA1`|0100|DATA(1w) — 1 data word|
+|`FSI_FRAME_TYPE_DATA2`|0101|DATA(2w) — 2 data words|
+|`FSI_FRAME_TYPE_DATA4`|0110|DATA(4w) — 4 data words|
+|`FSI_FRAME_TYPE_DATA6`|0111|DATA(6w) — 6 data words|
+|`FSI_FRAME_TYPE_ERROR`|1111|ERROR — error signalling, no data|
+
+All other 4-bit codes are reserved.
 
 ### Frame result types (defined in `FSIAnalyzer.h`)
 
 | Constant | Value | Emitted for |
 |---|---|---|
-|`FSI_RESULT_PREAMBLE` |0x00|Flush+SOF preamble detected|
+|`FSI_RESULT_PREAMBLE`  |0x00|Preamble + SOF detected|
 |`FSI_RESULT_FRAME_TYPE`|0x01|4-bit frame type field|
-|`FSI_RESULT_TAG` |0x02|4-bit tag field|
-|`FSI_RESULT_USERDATA` |0x03|8-bit user data field|
-|`FSI_RESULT_DATA_WORD`|0x04|Each 16-bit data word (`mData2` = word index)|
-|`FSI_RESULT_CRC` |0x05|8-bit CRC (`mFlags & 0x01` = CRC OK)|
-|`FSI_RESULT_EOF` |0x06|EOF pattern validated|
-|`FSI_RESULT_ERROR` |0xFF|Bad EOF or framing error|
+|`FSI_RESULT_USERDATA`  |0x03|8-bit user data field (data frames only)|
+|`FSI_RESULT_DATA_WORD` |0x04|Each 16-bit data word (`mData2` = word index)|
+|`FSI_RESULT_CRC`       |0x05|8-bit CRC (`mFlags & 0x01` = CRC OK)|
+|`FSI_RESULT_TAG`       |0x02|4-bit frame tag field|
+|`FSI_RESULT_EOF`       |0x06|EOF pattern (0110) validated|
+|`FSI_RESULT_ERROR`     |0xFF|Bad EOF pattern or framing error|
 
-### `mFlags` usage
+### `mFlags` and `mData2` usage
 
-| Frame type | Bit | Meaning |
+| Frame type | Field | Meaning |
 |---|---|---|
-|`FSI_RESULT_CRC`|bit 0 (0x01)|1 = CRC matched, 0 = CRC failed|
+|`FSI_RESULT_CRC`     |`mFlags` bit 0|1 = CRC matched, 0 = CRC failed|
+|`FSI_RESULT_CRC`     |`mData2`      |Computed (expected) CRC value|
+|`FSI_RESULT_DATA_WORD`|`mData2`     |Zero-based word index within frame|
 
 ### 2-lane interleaving (`CollectBits`)
 
-In 2-lane mode, each clock edge delivers two logical bits:
-- TXD0 → even-indexed bits (positions 0, 2, 4, …)
-- TXD1 → odd-indexed bits (positions 1, 3, 5, …)
+`CollectBits(count, value, start, end, interleaved)` has two modes:
 
-`ceil(count/2)` clock edges are consumed per `CollectBits(count)` call.
-Both bits are shifted into `value` MSB-first in interleaved order.
+**`interleaved = false`** — control fields (Frame Type, Frame Tag, EOF,
+Postamble):
+- Always consumes `count` clock edges from TXD0.
+- In 2-lane mode the TRM specifies these fields are transmitted complete and
+  identical on both lanes; reading D0 is sufficient.
+
+**`interleaved = true`** — data fields (User Data, Data Words, CRC):
+- 1-lane: reads `count` edges from TXD0.
+- 2-lane: reads `ceil(count/2)` edges; each edge delivers TXD0 (even-position
+  bit, index 0, 2, 4 …) and TXD1 (odd-position bit, index 1, 3, 5 …)
+  simultaneously. Both are shifted into `value` MSB-first.
 
 ### CRC
 
 FSI uses CRC-8, polynomial `x^8 + x^2 + x + 1` (0x07), seed 0x00,
 no final XOR. The lookup table `kFsiCrcTable[256]` in `FSIAnalyzer.cpp`
-implements this. The CRC covers the User Data byte only from the header
-(Frame Type and Tag are excluded), followed by each data word little-endian
-(LSB first, then MSB). `mData2` on the CRC frame holds the computed expected
-value for debugging.
+implements this.
+
+CRC input byte order:
+1. User Data byte (1 byte)
+2. Each data word, **LSB first then MSB** (2 bytes per word)
+
+Frame Type and Frame Tag are **not** included in the CRC.
 
 -----
 
@@ -212,11 +259,11 @@ No automated tests are currently wired up in this project. To add them:
 ### Manual verification workflow
 
 1. Connect TXCLK and TXD0 (and TXD1 if 2-lane) to a Logic device running
-   at ≥ 4× your FSI clock frequency (e.g. 200 MS/s for a 50 MHz FSI clock;
-   a Logic 4 at 12 MS/s suffices for FSI clocks up to ~3 MHz).
+   at ≥ 4× your FSI clock frequency.
 2. Load the plugin and add the analyzer to the capture.
-3. Inspect bubble labels: each FSI field should appear as a labelled segment.
-4. Check that CRC bubbles show **OK** on valid frames.
+3. Inspect bubble labels: each FSI field should appear as a labelled segment
+   in the order: PRE → FT → [UD → Data words → CRC] → TAG → EOF.
+4. Check that CRC bubbles show **OK** on valid data frames.
 5. Use **Analyzers → Export** to produce a CSV and compare field values
    against the firmware's transmitted data.
 

@@ -15,15 +15,15 @@ or spreadsheet work is needed.
 
 ## Supported frame types
 
-| Frame type | Description |
-|---|---|
-|PING |Heartbeat frame — no data words|
-|ERROR |Error signalling frame — no data words|
-|DATA(1w)|1 × 16-bit data word|
-|DATA(2w)|2 × 16-bit data words|
-|DATA(4w)|4 × 16-bit data words|
-|DATA(6w)|6 × 16-bit data words|
-|DATA(Nw)|N × 16-bit data words, where N is configured in the analyzer settings|
+| Frame type | 4-bit code | Description |
+|---|---|---|
+|PING      |0000|Heartbeat frame — no data words|
+|ERROR     |1111|Error signalling frame — no data words|
+|DATA(1w)  |0100|1 × 16-bit data word|
+|DATA(2w)  |0101|2 × 16-bit data words|
+|DATA(4w)  |0110|4 × 16-bit data words|
+|DATA(6w)  |0111|6 × 16-bit data words|
+|DATA(Nw)  |0011|N × 16-bit data words, where N is configured in the analyzer settings|
 
 -----
 
@@ -117,16 +117,20 @@ FSI pin. If TXD1 / RXD1 is not assigned and 2-Lane Mode is off, it is ignored.
 #### 2-Lane Mode
 
 Enable this when your firmware configures the FSI peripheral for dual-lane
-operation. In 2-lane mode, the peripheral drives two data lines simultaneously:
-TXD0 carries even-indexed bits and TXD1 carries odd-indexed bits, sampled on
-the same clock edge. This doubles throughput but requires both lines to be
-probed.
+operation. In 2-lane mode:
+
+- **Control fields** (Frame Type, Frame Tag, EOF, Postamble) are transmitted
+  identically and completely on both TXD0 and TXD1. The analyzer reads TXD0.
+- **Data fields** (User Data, Data Words, CRC) are split across the two lanes:
+  TXD0 carries the even-index bits and TXD1 carries the odd-index bits,
+  sampled on the same clock edge. This doubles throughput but requires both
+  lines to be probed.
 
 Leave this **off** for standard single-lane captures.
 
 #### N-Word Frame Count
 
-Only applies to `DATA(Nw)` frames (frame type 0x6). Set this to the value of
+Only applies to `DATA(Nw)` frames (frame type 0011). Set this to the value of
 `FSI_TX_FRAME_CTRL.N_WORDS` from your firmware. Valid range: 1–16.
 
 This setting has no effect on fixed-size frame types (PING, ERROR, DATA 1w
@@ -139,19 +143,39 @@ values and likely a CRC failure.
 
 -----
 
+## Frame structure
+
+Each FSI frame has the following fields in order:
+
+| Field | Bits | Present in |
+|---|---|---|
+|Preamble (4 clocks HIGH) + SOF (1001)|8|All frames|
+|Frame Type|4|All frames|
+|User Data|8|Data frames only|
+|Data Words (N × 16 bits)|N×16|Data frames only|
+|CRC|8|Data frames only|
+|Frame Tag|4|All frames|
+|EOF (0110)|4|All frames|
+|Postamble (4 clocks HIGH)|4|All frames|
+
+PING and ERROR frames carry no user data, data words, or CRC — just
+Frame Type, Frame Tag, EOF, and Postamble after the preamble.
+
+-----
+
 ## Reading the waveform
 
 Each FSI frame produces the following labelled segments on the waveform:
 
 | Label (short) | Label (expanded) | What it shows |
 |---|---|---|
-|PRE|Preamble|Start of frame detected|
+|PRE|Preamble|Start of frame detected (preamble + SOF)|
 |FT|PING / ERROR / DATA(Nw) / …|Frame type decoded from the header|
+|UD|UserData: 0xNN|8-bit user data byte (data frames only)|
+|D0xNNNN|Data[n]: 0xNNNN|16-bit data word, with word index shown (data frames only)|
+|CRC|CRC: 0xNN OK / CRC: 0xNN [BAD]|Received CRC and pass/fail status (data frames only)|
 |TAG|Tag: N|4-bit user tag value (0–15)|
-|UD|UserData: 0xNN|8-bit user data byte|
-|D0xNNNN|Data[n]: 0xNNNN|16-bit data word, with word index shown|
-|CRC|CRC: 0xNN OK / CRC: 0xNN [BAD]|Received CRC and pass/fail status|
-|EOF|End of Frame|EOF pattern (0x9) validated|
+|EOF|End of Frame|EOF pattern (0110) validated|
 |ERR|Framing Error|Bad EOF pattern or sync loss|
 
 Click any bubble to see the full expanded label. The number format (decimal,
@@ -165,6 +189,7 @@ expected value computed from the frame contents, **[BAD]** is appended. A
 CRC failure typically means:
 
 - Probing noise or insufficient sample rate
+- The N-Word Frame Count setting does not match the firmware
 - The captured frame was genuinely corrupted on the wire
 
 -----
@@ -205,15 +230,16 @@ rate.
 
 ### Only the first frame is decoded, then nothing
 
-- The preamble sync state machine requires at least 6 alternating bits
-  followed by 2+ idle low bits before the SOF nibble. If your firmware
-  sends very short inter-frame gaps, the analyzer may miss subsequent
-  preambles. This is a known limitation.
+- The preamble sync state machine requires at least 5 consecutive HIGH bits
+  followed by SOF (1001) to lock onto a frame. If your firmware sends very
+  short inter-frame gaps, the postamble HIGH bits from one frame may merge
+  with the preamble of the next, causing the analyzer to miss subsequent
+  frames. This is a known limitation.
 
 ### Data words look wrong / values seem shifted
 
 - In 2-lane mode, confirm both TXD0 and TXD1 are assigned to the correct
-  channels. Swapping them produces incorrect interleaving.
+  channels. Swapping them produces incorrect bit interleaving.
 - In 1-lane mode, confirm 2-Lane Mode is **off**.
 - For N-word frames, confirm the N-Word Frame Count setting matches firmware.
 
@@ -238,9 +264,9 @@ rate.
   supported. The analyzer must be used with real captured data.
 
 - **Short inter-frame gaps may cause missed frames.** The preamble state
-  machine requires a minimum flush sequence before committing to a frame
-  start. Very tight back-to-back frame timing may result in one or more
-  frames being skipped.
+  machine requires a minimum of 5 consecutive HIGH bits before committing to
+  a frame start. Very tight back-to-back frame timing may result in one or
+  more frames being skipped.
 
 - **Single-ended probing only.** FSI signals probed after an LVDS or
   isolation transceiver are supported. Direct probing of LVDS differential

@@ -6,11 +6,11 @@
 #include <vector>
 
 const char* FrameTypeName( U64 ft );
+static bool IsDataFrame( U8 ft );
 
 // ============================================================================
 //  FSI CRC-8
-//  Polynomial: x^8 + x^2 + x + 1 (0x07)
-//  Seed = 0x00, no final XOR.
+//  Polynomial: x^8 + x^2 + x + 1 (0x07), seed 0x00, no final XOR.
 // ============================================================================
 static const U8 kFsiCrcTable[256] = {
     0x00,0x07,0x0E,0x09,0x1C,0x1B,0x12,0x15,0x38,0x3F,0x36,0x31,0x24,0x23,0x2A,0x2D,
@@ -31,11 +31,13 @@ static const U8 kFsiCrcTable[256] = {
     0xDE,0xD9,0xD0,0xD7,0xC2,0xC5,0xCC,0xCB,0xE6,0xE1,0xE8,0xEF,0xFA,0xFD,0xF4,0xF3
 };
 
+// ============================================================================
+
 FSIAnalyzer::FSIAnalyzer()
     : Analyzer2(),
       mClock(nullptr), mData0(nullptr), mData1(nullptr),
       mSampleRateHz(0), mTwoLane(false), mNWordCount(16),
-      mLastClockSample(0), mLastClockState(BIT_LOW)
+      mLastClockSample(0)
 {
     SetAnalyzerSettings( &mSettings );
     UseFrameV2();
@@ -56,18 +58,31 @@ void FSIAnalyzer::SetupResults()
         mResults->AddChannelBubblesWillAppearOn( mSettings.mDataChannel1 );
 }
 
+// Returns the number of 16-bit data words for a given frame type.
 U32 FSIAnalyzer::DataWordCount( U8 frame_type ) const
 {
     switch( frame_type )
     {
-    case 0x2: return 1;
-    case 0x3: return 2;
-    case 0x4: return 4;
-    case 0x5: return 6;
-    case 0x6: return mNWordCount;   // from UI setting
-    default:  return 0;             // PING and ERROR have no data words
+    case FSI_FRAME_TYPE_DATA1: return 1;
+    case FSI_FRAME_TYPE_DATA2: return 2;
+    case FSI_FRAME_TYPE_DATA4: return 4;
+    case FSI_FRAME_TYPE_DATA6: return 6;
+    case FSI_FRAME_TYPE_NWORD: return mNWordCount;
+    default:                   return 0;
     }
 }
+
+// Returns true for frame types that carry User Data, Data Words, and CRC.
+static bool IsDataFrame( U8 ft )
+{
+    return ft == FSI_FRAME_TYPE_DATA1 || ft == FSI_FRAME_TYPE_DATA2 ||
+           ft == FSI_FRAME_TYPE_DATA4 || ft == FSI_FRAME_TYPE_DATA6 ||
+           ft == FSI_FRAME_TYPE_NWORD;
+}
+
+// ============================================================================
+//  Signal sampling
+// ============================================================================
 
 void FSIAnalyzer::AdvanceToNextClockEdge( BitState& lane0_bit, BitState& lane1_bit )
 {
@@ -87,36 +102,43 @@ void FSIAnalyzer::AdvanceToNextClockEdge( BitState& lane0_bit, BitState& lane1_b
     mLastClockSample = clk_sample;
 }
 
-// 2-lane interleaving fix:
-// Each clock edge delivers two bits: D0=even position, D1=odd position.
-// ceil(count/2) edges are needed to collect 'count' bits.
+// ============================================================================
+//  Bit collection
+//
+//  interleaved = false  — control fields (Frame Type, Frame Tag, EOF, postamble)
+//    TRM: these fields are transmitted complete and identical on both lanes in
+//    2-lane mode.  Always read N edges from D0 only.
+//
+//  interleaved = true   — data fields (User Data, Data Words, CRC)
+//    1-lane: N edges, D0 only.
+//    2-lane: ceil(N/2) edges; each edge: D0 = even-position bit, D1 = odd.
+// ============================================================================
+
 bool FSIAnalyzer::CollectBits( U32 count, U64& value,
-                                U64& start_sample, U64& end_sample )
+                                U64& start_sample, U64& end_sample,
+                                bool interleaved )
 {
     value        = 0;
     start_sample = 0;
     end_sample   = 0;
 
-    if( mTwoLane )
+    if( mTwoLane && interleaved )
     {
-        U32 edges_needed = ( count + 1 ) / 2;
-
-        for( U32 edge = 0; edge < edges_needed; edge++ )
+        U32 edges = ( count + 1 ) / 2;
+        for( U32 e = 0; e < edges; e++ )
         {
             BitState b0, b1;
             AdvanceToNextClockEdge( b0, b1 );
             U64 s = mClock->GetSampleNumber();
-            if( edge == 0 )               start_sample = s;
-            if( edge == edges_needed - 1 ) end_sample  = s;
+            if( e == 0 )          start_sample = s;
+            if( e == edges - 1 )  end_sample   = s;
 
-            // Even-indexed logical bit
-            U32 even_bit_pos = edge * 2;
-            if( even_bit_pos < count )
+            U32 pos_even = e * 2;
+            if( pos_even < count )
                 value = ( value << 1 ) | ( b0 == BIT_HIGH ? 1u : 0u );
 
-            // Odd-indexed logical bit (only if within count)
-            U32 odd_bit_pos = edge * 2 + 1;
-            if( odd_bit_pos < count )
+            U32 pos_odd = e * 2 + 1;
+            if( pos_odd < count )
                 value = ( value << 1 ) | ( b1 == BIT_HIGH ? 1u : 0u );
         }
     }
@@ -127,8 +149,8 @@ bool FSIAnalyzer::CollectBits( U32 count, U64& value,
             BitState b0, b1;
             AdvanceToNextClockEdge( b0, b1 );
             U64 s = mClock->GetSampleNumber();
-            if( i == 0 )         start_sample = s;
-            if( i == count - 1 ) end_sample   = s;
+            if( i == 0 )           start_sample = s;
+            if( i == count - 1 )   end_sample   = s;
 
             value = ( value << 1 ) | ( b0 == BIT_HIGH ? 1u : 0u );
         }
@@ -137,7 +159,10 @@ bool FSIAnalyzer::CollectBits( U32 count, U64& value,
     return true;
 }
 
-// CRC over std::vector — no fixed buffer, no overflow possible
+// ============================================================================
+//  CRC
+// ============================================================================
+
 U8 FSIAnalyzer::ComputeCRC( const std::vector<U8>& data )
 {
     U8 crc = 0x00;
@@ -146,18 +171,27 @@ U8 FSIAnalyzer::ComputeCRC( const std::vector<U8>& data )
     return crc;
 }
 
+// ============================================================================
+//  Frame synchronisation
+//
+//  FSI preamble (TRM §31.3.4.1):
+//    Idle    : data lines HIGH
+//    Preamble: 4 clock edges, data HIGH  (= 1111)
+//    SOF     : 4 bits = 1001
+//
+//  Since idle is also HIGH, preamble and idle are indistinguishable.
+//  We detect frame start by scanning for >= 5 consecutive HIGH bits
+//  (4 preamble + SOF[0]=1) followed by SOF[1..3] = 0, 0, 1.
+//
+//  A ring buffer of the 5 most-recent HIGH sample positions lets us
+//  place the preamble bubble start exactly 4 edges before SOF[0].
+// ============================================================================
+
 bool FSIAnalyzer::SyncPreamble( U64& frame_start_sample )
 {
-    enum State { HUNT_FLUSH, HUNT_IDLE, HUNT_SOF };
-    State state = HUNT_FLUSH;
-
-    U32 alternating_count = 0;
-    U32 idle_count        = 0;
-    U32 sof_bit_index     = 0;
-    U8  sof_expected[]    = { 1, 0, 1, 0 };   // SOF nibble = 0xA, MSB first
-    U64 preamble_start    = 0;
-    BitState prev_b0      = BIT_LOW;
-    bool first            = true;
+    U32 high_count   = 0;
+    U64 s_ring[5]    = { 0, 0, 0, 0, 0 };
+    U32 r            = 0;   // ring write index
 
     while( true )
     {
@@ -168,99 +202,73 @@ bool FSIAnalyzer::SyncPreamble( U64& frame_start_sample )
         if( ( s & 0xFFFFF ) == 0 )
             ReportProgress( s );
 
-        switch( state )
+        if( b0 == BIT_HIGH )
         {
-        case HUNT_FLUSH:
-            if( first )
-            {
-                preamble_start    = s;
-                prev_b0           = b0;
-                alternating_count = 1;
-                first             = false;
-            }
-            else if( b0 != prev_b0 )
-            {
-                alternating_count++;
-                prev_b0 = b0;
-            }
-            else
-            {
-                if( alternating_count >= 6 && b0 == BIT_LOW )
-                {
-                    idle_count = 1;
-                    state      = HUNT_IDLE;
-                }
-                else
-                {
-                    alternating_count = 1;
-                    prev_b0           = b0;
-                    preamble_start    = s;
-                }
-            }
-            break;
-
-        case HUNT_IDLE:
-            if( b0 == BIT_LOW )
-            {
-                idle_count++;
-                if( idle_count >= 2 )
-                {
-                    sof_bit_index = 0;
-                    state         = HUNT_SOF;
-                }
-            }
-            else
-            {
-                if( sof_expected[0] == 1 )
-                {
-                    sof_bit_index = 1;
-                    state         = HUNT_SOF;
-                }
-                else
-                {
-                    state             = HUNT_FLUSH;
-                    alternating_count = 1;
-                    prev_b0           = b0;
-                }
-            }
-            break;
-
-        case HUNT_SOF:
-        {
-            U8 got = ( b0 == BIT_HIGH ) ? 1 : 0;
-            if( got == sof_expected[sof_bit_index] )
-            {
-                sof_bit_index++;
-                if( sof_bit_index == 4 )
-                {
-                    Frame pf;
-                    pf.mStartingSampleInclusive = preamble_start;
-                    pf.mEndingSampleInclusive   = s;
-                    pf.mType  = FSI_RESULT_PREAMBLE;
-                    pf.mData1 = 0;
-                    pf.mData2 = 0;
-                    pf.mFlags = 0;
-                    mResults->AddFrame( pf );
-
-                    FrameV2 fv2;
-                    mResults->AddFrameV2( fv2, "preamble", preamble_start, s );
-
-                    frame_start_sample = s;
-                    return true;
-                }
-            }
-            else
-            {
-                state             = HUNT_FLUSH;
-                alternating_count = 1;
-                prev_b0           = b0;
-                preamble_start    = s;
-            }
-            break;
+            s_ring[ r % 5 ] = s;
+            r++;
+            high_count++;
         }
+        else  // BIT_LOW — potential SOF[1] = 0
+        {
+            if( high_count >= 5 )
+            {
+                // Read SOF[2] — must be LOW
+                BitState b2, dummy;
+                AdvanceToNextClockEdge( b2, dummy );
+
+                if( b2 == BIT_LOW )
+                {
+                    // Read SOF[3] — must be HIGH
+                    BitState b3;
+                    AdvanceToNextClockEdge( b3, dummy );
+                    U64 s3 = mClock->GetSampleNumber();
+
+                    if( b3 == BIT_HIGH )
+                    {
+                        // SOF = 1001 confirmed.
+                        // Preamble started 4 edges before SOF[0].
+                        // SOF[0] is the last HIGH we stored: s_ring[(r-1)%5].
+                        // Four edges before that: s_ring[(r-5)%5] = s_ring[r%5].
+                        U64 pre_start = ( r >= 5 ) ? s_ring[ r % 5 ] : s_ring[ 0 ];
+
+                        Frame pf;
+                        pf.mStartingSampleInclusive = pre_start;
+                        pf.mEndingSampleInclusive   = s3;
+                        pf.mType  = FSI_RESULT_PREAMBLE;
+                        pf.mData1 = 0; pf.mData2 = 0; pf.mFlags = 0;
+                        mResults->AddFrame( pf );
+
+                        FrameV2 fv2;
+                        mResults->AddFrameV2( fv2, "preamble", pre_start, s3 );
+
+                        frame_start_sample = s3;
+                        return true;
+                    }
+                }
+            }
+            // Not a valid SOF — reset and keep scanning
+            high_count = 0;
+            r          = 0;
         }
     }
 }
+
+// ============================================================================
+//  Main decode loop
+//
+//  Frame structure per TRM Table 31-4 / §31.3.4.1:
+//
+//    ALL frames:
+//      Preamble (4 clocks HIGH) + SOF (1001)  ← detected by SyncPreamble()
+//      Frame Type  : 4 bits  control field
+//      [data frames only:]
+//        User Data : 8 bits  interleaved
+//        Data Words: N×16b   interleaved
+//        CRC       : 8 bits  interleaved
+//      Frame Tag   : 4 bits  control field
+//      EOF         : 4 bits  control field  = 0110
+//      Postamble   : 4 clocks HIGH          = 1111  (consumed silently)
+// ============================================================================
 
 void FSIAnalyzer::WorkerThread()
 {
@@ -282,83 +290,71 @@ void FSIAnalyzer::WorkerThread()
 
         mResults->CommitPacketAndStartNewPacket();
 
-        // Header: FrameType[3:0], Tag[3:0], UserData[7:0]  (16 bits, MSB first)
-        U64 hdr_val, hdr_start, hdr_end;
-        CollectBits( 16, hdr_val, hdr_start, hdr_end );
-
-        U8 frame_type = ( hdr_val >> 12 ) & 0x0F;
-        U8 tag        = ( hdr_val >>  8 ) & 0x0F;
-        U8 user_data  = ( hdr_val       ) & 0xFF;
-
-        // CRC buffer — vector, no fixed-size limit
-        // TRM: CRC covers User Data byte first, then data words LSB-first.
-        // Frame Type and Tag bytes are NOT included.
-        std::vector<U8> crc_buf;
-        crc_buf.reserve( 1 + mNWordCount * 2 );
-        crc_buf.push_back( user_data );
-
-        U64 hdr_span = hdr_end - hdr_start;
-        U64 quarter  = hdr_span / 4;
+        // ---- Frame Type (4 bits, control field) ----
+        U64 ft_val, ft_start, ft_end;
+        CollectBits( 4, ft_val, ft_start, ft_end, false );
+        U8 frame_type = (U8)ft_val;
 
         {
             Frame f;
-            f.mStartingSampleInclusive = hdr_start;
-            f.mEndingSampleInclusive   = hdr_start + quarter;
+            f.mStartingSampleInclusive = ft_start;
+            f.mEndingSampleInclusive   = ft_end;
             f.mType  = FSI_RESULT_FRAME_TYPE;
             f.mData1 = frame_type; f.mData2 = 0; f.mFlags = 0;
             mResults->AddFrame( f );
             FrameV2 fv2;
             fv2.AddString( "type", FrameTypeName( frame_type ) );
             fv2.AddInteger( "value", frame_type );
-            mResults->AddFrameV2( fv2, "frame_type", f.mStartingSampleInclusive, f.mEndingSampleInclusive );
-        }
-        {
-            Frame f;
-            f.mStartingSampleInclusive = hdr_start + quarter;
-            f.mEndingSampleInclusive   = hdr_start + 2 * quarter;
-            f.mType  = FSI_RESULT_TAG;
-            f.mData1 = tag; f.mData2 = 0; f.mFlags = 0;
-            mResults->AddFrame( f );
-            FrameV2 fv2;
-            fv2.AddInteger( "tag", tag );
-            mResults->AddFrameV2( fv2, "tag", f.mStartingSampleInclusive, f.mEndingSampleInclusive );
-        }
-        {
-            Frame f;
-            f.mStartingSampleInclusive = hdr_start + 2 * quarter;
-            f.mEndingSampleInclusive   = hdr_end;
-            f.mType  = FSI_RESULT_USERDATA;
-            f.mData1 = user_data; f.mData2 = 0; f.mFlags = 0;
-            mResults->AddFrame( f );
-            FrameV2 fv2;
-            fv2.AddInteger( "user_data", user_data );
-            mResults->AddFrameV2( fv2, "user_data", f.mStartingSampleInclusive, f.mEndingSampleInclusive );
+            mResults->AddFrameV2( fv2, "frame_type", ft_start, ft_end );
         }
 
-        // Data words
-        U32 num_words = DataWordCount( frame_type );
-        for( U32 w = 0; w < num_words; w++ )
+        // ---- User Data, Data Words, CRC (data frames only) ----
+        if( IsDataFrame( frame_type ) )
         {
-            U64 word_val, ws, we;
-            CollectBits( 16, word_val, ws, we );
-            crc_buf.push_back( (U8)( word_val      ) );   // LSB first per TRM
-            crc_buf.push_back( (U8)( word_val >> 8 ) );
+            std::vector<U8> crc_buf;
+            crc_buf.reserve( 1 + mNWordCount * 2 );
 
-            Frame f;
-            f.mStartingSampleInclusive = ws; f.mEndingSampleInclusive = we;
-            f.mType  = FSI_RESULT_DATA_WORD;
-            f.mData1 = word_val; f.mData2 = w; f.mFlags = 0;
-            mResults->AddFrame( f );
-            FrameV2 fv2;
-            fv2.AddInteger( "word_index", w );
-            fv2.AddInteger( "value", word_val );
-            mResults->AddFrameV2( fv2, "data", ws, we );
-        }
+            // User Data — 8 bits, interleaved
+            U64 ud_val, ud_start, ud_end;
+            CollectBits( 8, ud_val, ud_start, ud_end, true );
+            U8 user_data = (U8)ud_val;
+            crc_buf.push_back( user_data );
 
-        // CRC
-        {
+            {
+                Frame f;
+                f.mStartingSampleInclusive = ud_start;
+                f.mEndingSampleInclusive   = ud_end;
+                f.mType  = FSI_RESULT_USERDATA;
+                f.mData1 = user_data; f.mData2 = 0; f.mFlags = 0;
+                mResults->AddFrame( f );
+                FrameV2 fv2;
+                fv2.AddInteger( "user_data", user_data );
+                mResults->AddFrameV2( fv2, "user_data", ud_start, ud_end );
+            }
+
+            // Data Words — interleaved, word 0 first
+            U32 num_words = DataWordCount( frame_type );
+            for( U32 w = 0; w < num_words; w++ )
+            {
+                U64 word_val, ws, we;
+                CollectBits( 16, word_val, ws, we, true );
+                crc_buf.push_back( (U8)( word_val      ) );   // LSB first
+                crc_buf.push_back( (U8)( word_val >> 8 ) );
+
+                Frame f;
+                f.mStartingSampleInclusive = ws; f.mEndingSampleInclusive = we;
+                f.mType  = FSI_RESULT_DATA_WORD;
+                f.mData1 = word_val; f.mData2 = w; f.mFlags = 0;
+                mResults->AddFrame( f );
+                FrameV2 fv2;
+                fv2.AddInteger( "word_index", w );
+                fv2.AddInteger( "value", word_val );
+                mResults->AddFrameV2( fv2, "data", ws, we );
+            }
+
+            // CRC — 8 bits, interleaved
             U64 crc_val, cs, ce;
-            CollectBits( 8, crc_val, cs, ce );
+            CollectBits( 8, crc_val, cs, ce, true );
             U8 computed_crc = ComputeCRC( crc_buf );
             bool crc_ok = ( (U8)crc_val == computed_crc );
 
@@ -375,12 +371,28 @@ void FSIAnalyzer::WorkerThread()
             mResults->AddFrameV2( fv2, "crc", cs, ce );
         }
 
-        // EOF (4 bits = 0x9)
-        {
-            U64 eof_val, es, ee;
-            CollectBits( 4, eof_val, es, ee );
-            bool eof_ok = ( eof_val == 0x9 );
+        // ---- Frame Tag (4 bits, control field, present in all frame types) ----
+        U64 tag_val, tag_start, tag_end;
+        CollectBits( 4, tag_val, tag_start, tag_end, false );
 
+        {
+            Frame f;
+            f.mStartingSampleInclusive = tag_start;
+            f.mEndingSampleInclusive   = tag_end;
+            f.mType  = FSI_RESULT_TAG;
+            f.mData1 = tag_val; f.mData2 = 0; f.mFlags = 0;
+            mResults->AddFrame( f );
+            FrameV2 fv2;
+            fv2.AddInteger( "tag", tag_val );
+            mResults->AddFrameV2( fv2, "tag", tag_start, tag_end );
+        }
+
+        // ---- EOF (4 bits = 0110, control field) ----
+        U64 eof_val, es, ee;
+        CollectBits( 4, eof_val, es, ee, false );
+        bool eof_ok = ( eof_val == 0x6 );   // 0110
+
+        {
             Frame f;
             f.mStartingSampleInclusive = es; f.mEndingSampleInclusive = ee;
             f.mType  = eof_ok ? FSI_RESULT_EOF : FSI_RESULT_ERROR;
@@ -391,10 +403,18 @@ void FSIAnalyzer::WorkerThread()
             mResults->AddFrameV2( fv2, eof_ok ? "eof" : "error", es, ee );
         }
 
+        // ---- Postamble (4 clocks HIGH = 1111, control field, consumed silently) ----
+        U64 post_val, ps, pe;
+        CollectBits( 4, post_val, ps, pe, false );
+
         mResults->CommitResults();
         ReportProgress( mClock->GetSampleNumber() );
     }
 }
+
+// ============================================================================
+//  SDK entry points
+// ============================================================================
 
 U32  FSIAnalyzer::GetMinimumSampleRateHz() { return 4000000; }
 const char* FSIAnalyzer::GetAnalyzerName() const { return "TI FSI"; }
@@ -405,14 +425,14 @@ const char* FrameTypeName( U64 ft )
 {
     switch( ft )
     {
-    case 0x0: return "PING";
-    case 0x1: return "ERROR";
-    case 0x2: return "DATA(1w)";
-    case 0x3: return "DATA(2w)";
-    case 0x4: return "DATA(4w)";
-    case 0x5: return "DATA(6w)";
-    case 0x6: return "DATA(Nw)";
-    default:  return "UNKNOWN";
+    case FSI_FRAME_TYPE_PING:  return "PING";
+    case FSI_FRAME_TYPE_ERROR: return "ERROR";
+    case FSI_FRAME_TYPE_DATA1: return "DATA(1w)";
+    case FSI_FRAME_TYPE_DATA2: return "DATA(2w)";
+    case FSI_FRAME_TYPE_DATA4: return "DATA(4w)";
+    case FSI_FRAME_TYPE_DATA6: return "DATA(6w)";
+    case FSI_FRAME_TYPE_NWORD: return "DATA(Nw)";
+    default:                   return "UNKNOWN";
     }
 }
 

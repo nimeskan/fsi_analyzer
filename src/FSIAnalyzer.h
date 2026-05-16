@@ -5,18 +5,18 @@
 #include "FSIAnalyzerResults.h"
 
 // -----------------------------------------------------------------------
-// FSI Frame Types (4-bit field)
+// FSI Frame Type 4-bit codes (TRM Table 31-5)
 // -----------------------------------------------------------------------
-#define FSI_FRAME_TYPE_PING     0x0
-#define FSI_FRAME_TYPE_ERROR    0x1
-#define FSI_FRAME_TYPE_DATA1    0x2   // 1-word data
-#define FSI_FRAME_TYPE_DATA2    0x3   // 2-word data
-#define FSI_FRAME_TYPE_DATA4    0x4   // 4-word data
-#define FSI_FRAME_TYPE_DATA6    0x5   // 6-word data
-#define FSI_FRAME_TYPE_NWORD    0x6   // N-word (software configured)
+#define FSI_FRAME_TYPE_PING   0x0   // 0000 — heartbeat
+#define FSI_FRAME_TYPE_ERROR  0xF   // 1111 — error / attention
+#define FSI_FRAME_TYPE_DATA1  0x4   // 0100 — 1 data word
+#define FSI_FRAME_TYPE_DATA2  0x5   // 0101 — 2 data words
+#define FSI_FRAME_TYPE_DATA4  0x6   // 0110 — 4 data words
+#define FSI_FRAME_TYPE_DATA6  0x7   // 0111 — 6 data words
+#define FSI_FRAME_TYPE_NWORD  0x3   // 0011 — N data words (software configured)
 
 // -----------------------------------------------------------------------
-// Saleae Frame types emitted by this analyzer
+// Saleae result frame types emitted by this analyzer
 // -----------------------------------------------------------------------
 #define FSI_RESULT_PREAMBLE     0x00
 #define FSI_RESULT_FRAME_TYPE   0x01
@@ -44,39 +44,43 @@ public:
     virtual bool NeedsRerun();
 
 protected:
-    // Advance to next DDR clock edge.
-    // In 1-lane: lane0_bit is the bit on TXD0.
-    // In 2-lane: lane0_bit = TXD0 (even bit), lane1_bit = TXD1 (odd bit).
+    // Advance to next DDR clock edge and sample both data lanes.
     void AdvanceToNextClockEdge( BitState& lane0_bit, BitState& lane1_bit );
 
-    // Collect 'count' logical bits into a value (MSB first).
-    // 1-lane: reads 'count' DDR edges from TXD0 only.
-    // 2-lane: reads ceil(count/2) edges; each edge delivers D0 (even) + D1 (odd).
+    // Collect 'count' logical bits, MSB first.
+    //
+    // interleaved = false  (control fields: Frame Type, Frame Tag, EOF, postamble)
+    //   Always reads 'count' edges from D0 only.  In 2-lane mode these fields
+    //   are transmitted complete and identical on both lanes, so D0 suffices.
+    //
+    // interleaved = true   (data fields: User Data, Data Words, CRC)
+    //   1-lane: reads 'count' edges from D0.
+    //   2-lane: reads ceil(count/2) edges; each edge delivers D0 (even-position
+    //           bit) and D1 (odd-position bit) simultaneously.
     bool CollectBits( U32 count, U64& value,
-                      U64& start_sample, U64& end_sample );
+                      U64& start_sample, U64& end_sample,
+                      bool interleaved = true );
 
-    // Returns the number of data words for a given frame type.
-    // Uses mNWordCount for type 0x6.
+    // Returns the number of 16-bit data words for a given frame type.
     U32  DataWordCount( U8 frame_type ) const;
 
-    // Detect flush+SOF preamble.
+    // Scan for preamble (4 clocks HIGH) + SOF (1001). Returns true when found.
     bool SyncPreamble( U64& frame_start_sample );
 
-    // Compute FSI CRC-8 over a byte vector.
+    // CRC-8 over a byte vector (poly 0x07, seed 0x00, no final XOR).
     U8   ComputeCRC( const std::vector<U8>& data );
 
     FSIAnalyzerSettings mSettings;
     std::unique_ptr<FSIAnalyzerResults> mResults;
     AnalyzerChannelData* mClock;
     AnalyzerChannelData* mData0;
-    AnalyzerChannelData* mData1;    // nullptr when 1-lane
+    AnalyzerChannelData* mData1;    // nullptr in 1-lane mode
 
     U32  mSampleRateHz;
     bool mTwoLane;
     U32  mNWordCount;
 
-    U64      mLastClockSample;
-    BitState mLastClockState;
+    U64 mLastClockSample;
 };
 
 extern "C" ANALYZER_EXPORT const char* __cdecl GetAnalyzerName();
