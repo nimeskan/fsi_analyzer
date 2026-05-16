@@ -205,19 +205,43 @@ and increment the counter. The ring buffer overwrites oldest entries first
 (modulo 5). When `high_count` reaches 5 or more, `s_ring[r % 5]` holds the
 sample 5 edges ago — i.e., the sample where the preamble began.
 
-### 4b — LOW arrival triggers SOF check
+### 4b — Any LOW resets the accumulator
+
+The `else` branch handles every LOW bit — regardless of how many HIGHs
+preceded it:
 
 ```cpp
         else  // BIT_LOW — potential SOF[1] = 0
         {
             if( high_count >= 5 )
             {
+                // ... SOF peek ...
+            }
+            // Not a valid SOF — reset and keep scanning
+            high_count = 0;    // ← OUTSIDE the if(high_count>=5) block
+            r          = 0;
+        }
 ```
 
-The first LOW after 5+ HIGHs is SOF bit 1 (= 0). The code now peeks at the
-next two bits to complete the SOF check:
+The reset `high_count = 0; r = 0;` sits **outside** the
+`if( high_count >= 5 )` guard, inside the `else` block. This means it
+executes for **every LOW bit** — whether the count was 0, 3, or 4. A
+single LOW at any point tears down the entire accumulated count and ring
+buffer and forces the scanner to start over from zero.
+
+The `if( high_count >= 5 )` block is only an opportunity to attempt a SOF
+confirmation first. If the attempt is skipped (count < 5) or fails, the
+reset at the bottom always runs.
+
+### 4c — SOF check when high_count ≥ 5
+
+When a LOW arrives after 5 or more HIGHs, the first LOW is treated as
+SOF[1] = 0. The code immediately peeks at the next two bits to confirm
+the full SOF pattern `1 0 0 1`:
 
 ```cpp
+            if( high_count >= 5 )
+            {
                 // Read SOF[2] — must be LOW
                 BitState b2, dummy;
                 AdvanceToNextClockEdge( b2, dummy );
@@ -233,16 +257,30 @@ next two bits to complete the SOF check:
                     {
 ```
 
-SOF = `1 0 0 1`. The three checks together confirm:
-- SOF[0] = 1 (was the last HIGH in the streak)
-- SOF[1] = 0 (the LOW that triggered this branch)
-- SOF[2] = 0 (just read as `b2`)
-- SOF[3] = 1 (just read as `b3`)
+SOF = `1 0 0 1`. The four bits and their sources:
+- SOF[0] = 1 — the last HIGH stored in the ring buffer
+- SOF[1] = 0 — the LOW that triggered this `else` branch
+- SOF[2] = 0 — read as `b2` by a new `AdvanceToNextClockEdge()` call
+- SOF[3] = 1 — read as `b3` by another `AdvanceToNextClockEdge()` call
 
-### 4c — Preamble bubble emission and return
+**Important:** `b2` and `b3` are consumed by calling `AdvanceToNextClockEdge()`
+inside the SOF check. If the check fails partway through, those clock edges
+have already been moved past and cannot be revisited:
 
-Once SOF is confirmed the preamble bubble is placed. The ring buffer gives
-the exact sample number of the preamble start (4 edges before SOF[0]):
+- If `b2` is HIGH (SOF[2] mismatch): one extra edge was consumed before
+  the reset. That HIGH is dropped — it does not contribute to the next
+  HIGH count.
+- If `b2` is LOW but `b3` is LOW (SOF[3] mismatch): two extra edges were
+  consumed before the reset. Both are dropped.
+
+After any partial SOF failure the reset fires and the loop resumes from
+the edge immediately after whichever bit caused the mismatch.
+
+### 4d — Preamble bubble emission and return
+
+When all three SOF checks pass, the preamble bubble is placed. The ring
+buffer gives the exact sample number of the preamble start (4 edges before
+SOF[0]):
 
 ```cpp
                         U64 pre_start = ( r >= 5 ) ? s_ring[ r % 5 ] : s_ring[ 0 ];
@@ -272,18 +310,10 @@ bubble text rendered by `FSIAnalyzerResults` is:
         break;
 ```
 
-### 4d — Failed SOF: reset and keep scanning
-
-If any of the three SOF checks fail, the counters reset and scanning continues:
-
-```cpp
-            // Not a valid SOF — reset and keep scanning
-            high_count = 0;
-            r          = 0;
-        }
-    }
-}
-```
+`return true` is the **only exit** from `SyncPreamble()` that does not
+reset. Every other path through the `else` block — whether the SOF check
+was never attempted or failed at b2 or b3 — falls through to the reset
+before looping.
 
 **State after Step 4:** the clock cursor is at the sample of SOF[3]. The next
 `AdvanceToNextClockEdge()` call will land on the first bit of the Frame Type
