@@ -202,7 +202,6 @@ rate.
 - Increase the sample rate. At marginal sample rates, edge detection errors
   cause bit flips that break CRC.
 - Verify the N-Word Frame Count matches `FSI_TX_FRAME_CTRL.N_WORDS`.
-- Confirm the capture sample rate is sufficient for your FSI clock speed.
 
 ### Only the first frame is decoded, then nothing
 
@@ -234,8 +233,6 @@ rate.
 - **N-word count must be set manually.** The number of data words in a
   `DATA(Nw)` frame cannot be determined from the wire — it must match the
   firmware configuration exactly.
-
-- **CRC is standard FSI CRC-8** (polynomial 0x07, seed 0x00). This is the same on all FSI-capable TI devices.
 
 - **No simulated waveform.** Logic 2's built-in simulation mode is not
   supported. The analyzer must be used with real captured data.

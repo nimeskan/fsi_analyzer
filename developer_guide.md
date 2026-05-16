@@ -58,7 +58,7 @@ AnalyzerResults  ← FSIAnalyzerResults   (render frames as text / CSV)
 Logic 2 loads .so → CreateAnalyzer() → FSIAnalyzer()
                   → SetupResults()
                   → WorkerThread() [runs on background thread]
-                       SyncPreamble() or SyncSpiCompat()
+                       SyncPreamble()
                        CollectBits(16) → header: frame_type, tag, user_data
                        CollectBits(16) × N → data words
                        CollectBits(8)  → CRC, verified against ComputeCRC()
@@ -71,7 +71,7 @@ Logic 2 loads .so → CreateAnalyzer() → FSIAnalyzer()
 
 | Constant | Value | Emitted for |
 |---|---|---|
-|`FSI_RESULT_PREAMBLE` |0x00|Flush+SOF or SPI CS assertion|
+|`FSI_RESULT_PREAMBLE` |0x00|Flush+SOF preamble detected|
 |`FSI_RESULT_FRAME_TYPE`|0x01|4-bit frame type field|
 |`FSI_RESULT_TAG` |0x02|4-bit tag field|
 |`FSI_RESULT_USERDATA` |0x03|8-bit user data field|
@@ -214,10 +214,10 @@ No automated tests are currently wired up in this project. To add them:
 1. Connect TXCLK and TXD0 (and TXD1 if 2-lane) to a Logic device running
    at ≥ 4× your FSI clock frequency (e.g. 200 MS/s for a 50 MHz FSI clock;
    a Logic 4 at 12 MS/s suffices for FSI clocks up to ~3 MHz).
-3. Load the plugin and add the analyzer to the capture.
-4. Inspect bubble labels: each FSI field should appear as a labelled segment.
-5. Check that CRC bubbles show **OK** on valid frames.
-6. Use **Analyzers → Export** to produce a CSV and compare field values
+2. Load the plugin and add the analyzer to the capture.
+3. Inspect bubble labels: each FSI field should appear as a labelled segment.
+4. Check that CRC bubbles show **OK** on valid frames.
+5. Use **Analyzers → Export** to produce a CSV and compare field values
    against the firmware's transmitted data.
 
 -----
@@ -246,9 +246,5 @@ No automated tests are currently wired up in this project. To add them:
   `SyncPreamble` is the highest-value starting point.
 - **`GenerateSimulationData()` is a stub** — returns 0, provides no synthetic
   waveform for offline testing inside Logic 2.
-- **macOS / Windows lib paths** in `CMakeLists.txt` still reference the legacy
-  `lib/` directory rather than the arch-specific subdirectories that the
-  bundled SDK actually uses.
-- **No automated tests.** See Testing section above.
 - **N-word count** cannot be inferred from the wire. The UI dropdown must be
   set to match `FSI_TX_FRAME_CTRL.N_WORDS` in firmware.
