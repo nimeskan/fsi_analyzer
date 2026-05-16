@@ -74,18 +74,24 @@ void FSIAnalyzer::WorkerThread()
 `mData1` is `nullptr` in 1-lane mode. Every part of the code that reads D1
 guards on this pointer first.
 
-The clock cursor is then forced to a falling edge before the main loop begins.
-This ensures every subsequent `AdvanceToNextEdge()` call lands on a rising
-edge first (FSI uses DDR — both edges are active):
+No pre-advance is performed on the clock cursor. FSI idle state is CLK=HIGH
+with no clock edges — the clock only runs during frame transmission. Because
+of this, "CLK is HIGH at capture start" always means the capture started
+during idle, and the very next clock edge will be the first falling edge of the
+preamble. Pre-advancing to that falling edge would consume preamble bit 1
+before `SyncPreamble` ever reads it, causing the first frame to be missed.
 
 ```cpp
 // FSIAnalyzer.cpp:283
-    if( mClock->GetBitState() == BIT_HIGH )
-        mClock->AdvanceToNextEdge();
+    // FSI idle state is CLK=HIGH with no clock edges.  The first edge in any
+    // capture is always the falling edge that opens the preamble.  Do NOT
+    // pre-advance: if CLK is HIGH here we are in idle, and AdvanceToNextEdge
+    // would consume preamble bit 1 before SyncPreamble ever reads it.
 ```
 
-**State after Step 1:** the clock cursor sits at the first falling edge in the
-capture. The main loop is about to start.
+**State after Step 1:** the clock cursor sits at position 0 of the capture.
+The first `AdvanceToNextEdge()` call inside `SyncPreamble` will land on the
+very first clock edge in the capture — which is preamble bit 1.
 
 ---
 

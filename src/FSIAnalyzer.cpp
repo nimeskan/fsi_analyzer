@@ -283,8 +283,10 @@ void FSIAnalyzer::WorkerThread()
     mData0 = GetAnalyzerChannelData( mSettings.mDataChannel0 );
     mData1 = mTwoLane ? GetAnalyzerChannelData( mSettings.mDataChannel1 ) : nullptr;
 
-    if( mClock->GetBitState() == BIT_HIGH )
-        mClock->AdvanceToNextEdge();
+    // FSI idle state is CLK=HIGH with no clock edges.  The first edge in any
+    // capture is always the falling edge that opens the preamble.  Do NOT
+    // pre-advance: if CLK is HIGH here we are in idle, and AdvanceToNextEdge
+    // would consume preamble bit 1 before SyncPreamble ever reads it.
 
     while( true )
     {
