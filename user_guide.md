@@ -137,15 +137,6 @@ the wire.
 analyzer will mis-align on N-word frames, producing incorrect data word
 values and likely a CRC failure.
 
-#### SPI-Compatible Mode
-
-Enable this when your firmware sets `FSI_TX_COMPAT_MODE`. In this mode the
-FSI peripheral signals frame start using a chip-select assertion on TXD0
-instead of the normal flush + SOF preamble. The rest of the frame structure
-(header, data words, CRC, EOF) is identical.
-
-Leave this **off** unless you know your firmware uses SPI-compatible mode.
-
 -----
 
 ## Reading the waveform
@@ -154,7 +145,7 @@ Each FSI frame produces the following labelled segments on the waveform:
 
 | Label (short) | Label (expanded) | What it shows |
 |---|---|---|
-|PRE / CS|Preamble / SPI-Compat CS|Start of frame detected|
+|PRE|Preamble|Start of frame detected|
 |FT|PING / ERROR / DATA(Nw) / …|Frame type decoded from the header|
 |TAG|Tag: N|4-bit user tag value (0–15)|
 |UD|UserData: 0xNN|8-bit user data byte|
@@ -204,9 +195,7 @@ rate.
 ### No frames decoded / analyzer shows nothing
 
 - Verify the channel assignments match your wiring.
-- Confirm the capture sample rate is ≥ 200 MS/s.
-- Check that the correct mode is selected: if firmware uses SPI-Compatible
-  Mode, enable it in settings; if not, leave it off.
+- Confirm the capture sample rate is ≥ 4× your FSI clock frequency.
 
 ### Every frame shows CRC BAD
 
@@ -259,7 +248,3 @@ rate.
 - **Single-ended probing only.** FSI signals probed after an LVDS or
   isolation transceiver are supported. Direct probing of LVDS differential
   pairs is not supported by Saleae hardware.
-
-- **SPI-Compatible Mode CS noise.** In SPI-compat mode the analyzer triggers
-  on any falling edge of TXD0. Pull-up noise during CS deassertion could
-  cause a spurious frame start to be detected.

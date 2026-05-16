@@ -34,7 +34,7 @@ static const U8 kFsiCrcTable[256] = {
 FSIAnalyzer::FSIAnalyzer()
     : Analyzer2(),
       mClock(nullptr), mData0(nullptr), mData1(nullptr),
-      mSampleRateHz(0), mTwoLane(false), mNWordCount(16), mSpiCompatMode(false),
+      mSampleRateHz(0), mTwoLane(false), mNWordCount(16),
       mLastClockSample(0), mLastClockState(BIT_LOW)
 {
     SetAnalyzerSettings( &mSettings );
@@ -262,47 +262,11 @@ bool FSIAnalyzer::SyncPreamble( U64& frame_start_sample )
     }
 }
 
-bool FSIAnalyzer::SyncSpiCompat( U64& frame_start_sample )
-{
-    while( true )
-    {
-        mData0->AdvanceToNextEdge();
-        U64 s = mData0->GetSampleNumber();
-
-        if( ( s & 0xFFFFF ) == 0 )
-            ReportProgress( s );
-
-        if( mData0->GetBitState() == BIT_LOW )
-        {
-            Frame pf;
-            pf.mStartingSampleInclusive = s;
-            pf.mEndingSampleInclusive   = s;
-            pf.mType  = FSI_RESULT_PREAMBLE;
-            pf.mData1 = 1;
-            pf.mData2 = 0;
-            pf.mFlags = 0x02;   // bit1 = SPI-compat flag
-            mResults->AddFrame( pf );
-
-            FrameV2 fv2;
-            fv2.AddString( "mode", "SPI-compat CS" );
-            mResults->AddFrameV2( fv2, "preamble", s, s );
-
-            if( mClock->GetBitState() == BIT_HIGH )
-                mClock->AdvanceToNextEdge();
-            mClock->AdvanceToNextEdge();
-
-            frame_start_sample = mClock->GetSampleNumber();
-            return true;
-        }
-    }
-}
-
 void FSIAnalyzer::WorkerThread()
 {
-    mSampleRateHz  = GetSampleRate();
-    mTwoLane       = mSettings.mTwoLane;
-    mNWordCount    = mSettings.mNWordCount;
-    mSpiCompatMode = mSettings.mSpiCompatMode;
+    mSampleRateHz = GetSampleRate();
+    mTwoLane      = mSettings.mTwoLane;
+    mNWordCount   = mSettings.mNWordCount;
 
     mClock = GetAnalyzerChannelData( mSettings.mClockChannel );
     mData0 = GetAnalyzerChannelData( mSettings.mDataChannel0 );
@@ -314,14 +278,7 @@ void FSIAnalyzer::WorkerThread()
     while( true )
     {
         U64 frame_start;
-        if( mSpiCompatMode )
-        {
-            if( !SyncSpiCompat( frame_start ) ) break;
-        }
-        else
-        {
-            if( !SyncPreamble( frame_start ) ) break;
-        }
+        if( !SyncPreamble( frame_start ) ) break;
 
         mResults->CommitPacketAndStartNewPacket();
 

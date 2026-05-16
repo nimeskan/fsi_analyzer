@@ -59,11 +59,8 @@ protected:
     // Uses mNWordCount for type 0x6.
     U32  DataWordCount( U8 frame_type ) const;
 
-    // Detect flush+SOF preamble (normal FSI mode).
+    // Detect flush+SOF preamble.
     bool SyncPreamble( U64& frame_start_sample );
-
-    // Detect SPI-compatible frame start (CS assertion = TXD0 going LOW).
-    bool SyncSpiCompat( U64& frame_start_sample );
 
     // Compute FSI CRC-8 over a byte vector.
     U8   ComputeCRC( const std::vector<U8>& data );
@@ -77,7 +74,6 @@ protected:
     U32  mSampleRateHz;
     bool mTwoLane;
     U32  mNWordCount;
-    bool mSpiCompatMode;
 
     U64      mLastClockSample;
     BitState mLastClockState;

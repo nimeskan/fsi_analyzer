@@ -22,7 +22,6 @@ public:
     // Protocol options
     bool    mTwoLane;           // true = 2-lane DDR interleaved mode
     U32     mNWordCount;        // word count for N-word frames (1-16)
-    bool    mSpiCompatMode;     // true = SPI-compatible preamble (CS-based)
 
 protected:
     std::unique_ptr<AnalyzerSettingInterfaceChannel>    mClockChannelInterface;
@@ -30,7 +29,6 @@ protected:
     std::unique_ptr<AnalyzerSettingInterfaceChannel>    mDataChannel1Interface;
     std::unique_ptr<AnalyzerSettingInterfaceBool>       mTwoLaneInterface;
     std::unique_ptr<AnalyzerSettingInterfaceNumberList> mNWordCountInterface;
-    std::unique_ptr<AnalyzerSettingInterfaceBool>       mSpiCompatModeInterface;
 
 private:
     std::string mSavedSettings;   // owns the string returned by SaveSettings()

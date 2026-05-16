@@ -84,8 +84,7 @@ Logic 2 loads .so → CreateAnalyzer() → FSIAnalyzer()
 
 | Frame type | Bit | Meaning |
 |---|---|---|
-|`FSI_RESULT_CRC` |bit 0 (0x01)|1 = CRC matched, 0 = CRC failed|
-|`FSI_RESULT_PREAMBLE`|bit 1 (0x02)|1 = SPI-compat CS mode, 0 = normal flush/SOF|
+|`FSI_RESULT_CRC`|bit 0 (0x01)|1 = CRC matched, 0 = CRC failed|
 
 ### 2-lane interleaving (`CollectBits`)
 
@@ -228,7 +227,6 @@ No automated tests are currently wired up in this project. To add them:
 | What you want to change | File | Where |
 |---|---|---|
 |Preamble / SOF detection logic|`src/FSIAnalyzer.cpp`|`SyncPreamble()`|
-|SPI-compat CS detection|`src/FSIAnalyzer.cpp`|`SyncSpiCompat()`|
 |Bit collection (1-lane and 2-lane)|`src/FSIAnalyzer.cpp`|`CollectBits()`|
 |CRC algorithm / lookup table|`src/FSIAnalyzer.cpp`|`kFsiCrcTable`, `ComputeCRC()`|
 |Frame type → word count mapping|`src/FSIAnalyzer.cpp`|`DataWordCount()`|

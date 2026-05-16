@@ -6,8 +6,7 @@ FSIAnalyzerSettings::FSIAnalyzerSettings()
       mDataChannel0( UNDEFINED_CHANNEL ),
       mDataChannel1( UNDEFINED_CHANNEL ),
       mTwoLane( false ),
-      mNWordCount( 16 ),
-      mSpiCompatMode( false )
+      mNWordCount( 16 )
 {
     mClockChannelInterface.reset( new AnalyzerSettingInterfaceChannel() );
     mClockChannelInterface->SetTitleAndTooltip( "TXCLK / RXCLK", "FSI clock line" );
@@ -44,19 +43,11 @@ FSIAnalyzerSettings::FSIAnalyzerSettings()
     }
     mNWordCountInterface->SetNumber( (double)mNWordCount );
 
-    mSpiCompatModeInterface.reset( new AnalyzerSettingInterfaceBool() );
-    mSpiCompatModeInterface->SetTitleAndTooltip( "SPI-Compatible Mode",
-        "Enable when FSI_TX_COMPAT_MODE is set in firmware. "
-        "Replaces flush+SOF preamble with SPI chip-select assertion. "
-        "Frame structure (header, data, CRC, EOF) is identical." );
-    mSpiCompatModeInterface->SetValue( mSpiCompatMode );
-
     AddInterface( mClockChannelInterface.get() );
     AddInterface( mDataChannel0Interface.get() );
     AddInterface( mDataChannel1Interface.get() );
     AddInterface( mTwoLaneInterface.get() );
     AddInterface( mNWordCountInterface.get() );
-    AddInterface( mSpiCompatModeInterface.get() );
 
     AddExportOption( 0, "Export as CSV" );
     AddExportExtension( 0, "CSV", "csv" );
@@ -71,12 +62,11 @@ FSIAnalyzerSettings::~FSIAnalyzerSettings() {}
 
 bool FSIAnalyzerSettings::SetSettingsFromInterfaces()
 {
-    mClockChannel  = mClockChannelInterface->GetChannel();
-    mDataChannel0  = mDataChannel0Interface->GetChannel();
-    mDataChannel1  = mDataChannel1Interface->GetChannel();
-    mTwoLane       = mTwoLaneInterface->GetValue();
-    mNWordCount    = (U32)mNWordCountInterface->GetNumber();
-    mSpiCompatMode = mSpiCompatModeInterface->GetValue();
+    mClockChannel = mClockChannelInterface->GetChannel();
+    mDataChannel0 = mDataChannel0Interface->GetChannel();
+    mDataChannel1 = mDataChannel1Interface->GetChannel();
+    mTwoLane      = mTwoLaneInterface->GetValue();
+    mNWordCount   = (U32)mNWordCountInterface->GetNumber();
 
     if( mClockChannel == UNDEFINED_CHANNEL )
     {
@@ -115,7 +105,6 @@ void FSIAnalyzerSettings::UpdateInterfacesFromSettings()
     mDataChannel1Interface->SetChannel( mDataChannel1 );
     mTwoLaneInterface->SetValue( mTwoLane );
     mNWordCountInterface->SetNumber( (double)mNWordCount );
-    mSpiCompatModeInterface->SetValue( mSpiCompatMode );
 }
 
 void FSIAnalyzerSettings::LoadSettings( const char* settings )
@@ -127,7 +116,6 @@ void FSIAnalyzerSettings::LoadSettings( const char* settings )
     text_archive >> mDataChannel1;
     text_archive >> mTwoLane;
     text_archive >> mNWordCount;
-    text_archive >> mSpiCompatMode;
 
     ClearChannels();
     AddChannel( mClockChannel,  "TXCLK",     true );
@@ -146,7 +134,6 @@ const char* FSIAnalyzerSettings::SaveSettings()
     text_archive << mDataChannel1;
     text_archive << mTwoLane;
     text_archive << mNWordCount;
-    text_archive << mSpiCompatMode;
 
     mSavedSettings = text_archive.GetString();
     return mSavedSettings.c_str();

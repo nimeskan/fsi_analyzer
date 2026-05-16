@@ -28,16 +28,8 @@ void FSIAnalyzerResults::GenerateBubbleText( U64 frame_index,
     switch( frame.mType )
     {
     case FSI_RESULT_PREAMBLE:
-        if( frame.mFlags & 0x02 )
-        {
-            AddResultString( "CS" );
-            AddResultString( "SPI-Compat CS" );
-        }
-        else
-        {
-            AddResultString( "PRE" );
-            AddResultString( "Preamble" );
-        }
+        AddResultString( "PRE" );
+        AddResultString( "Preamble" );
         break;
 
     case FSI_RESULT_FRAME_TYPE:
