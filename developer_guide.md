@@ -322,83 +322,133 @@ interleaving), and `ComputeCRC` (known byte vectors with expected outputs).
 
 ## Debugging
 
-### Use the CSV export as a ground truth
+### File logging
 
-**Analyzers → Export → Export as CSV** produces one row per decoded field with
-start and end sample numbers. Cross-check against what the firmware is actually
-sending:
+Logic 2 does not expose a console for plugin output. The standard approach is
+to write `fprintf` print statements to a log file and trace the program flow
+by reading the output after a capture.
 
-- Does every frame contain the expected field sequence (PRE, FT, UD, Data words, CRC, TAG, EOF)?
-- Do `Type` values match what firmware is sending?
-- Is `CRC OK` or `FAIL`? If FAIL, compare the `Value` column (received CRC byte)
-  against the CRC computed from the frame's User Data and Data Words.
-- Are `Start Sample` and `End Sample` consistent with your clock frequency?
-  Divide the sample delta by your capture sample rate — it should equal one
-  bit period (or half a bit period for 2-lane data fields).
-
-The CSV is the fastest way to see exactly where the decoder diverges from
-expectation before touching any code.
-
----
-
-### Add file logging to the plugin
-
-Logic 2 does not expose a console for plugin output. The plugin can write to a
-log file instead. Insert logging around the suspect code path in
-`src/FSIAnalyzer.cpp`:
+Add the include and a helper macro at the top of whichever source file you are
+debugging:
 
 ```cpp
-// Temporary — remove before release
 #include <cstdio>
 
-// Example: trace SyncPreamble's ring buffer state on every edge
-FILE* dbg = fopen( "/tmp/fsi_debug.log", "a" );
-fprintf( dbg, "high_count=%u  r=%u  sample=%llu  b0=%d\n",
-         high_count, r, (unsigned long long)s, (int)b0 );
-fclose( dbg );
+#define FSI_LOG( ... ) do { \
+    FILE* _f = fopen( "/tmp/fsi_debug.log", "a" ); \
+    fprintf( _f, __VA_ARGS__ ); \
+    fclose( _f ); \
+} while(0)
 ```
 
-Useful values to log depending on where the failure is:
+Then insert `FSI_LOG` calls at the points you want to trace. For example, to
+watch `SyncPreamble` process every clock edge:
 
-| Suspect area | Values to log |
-|---|---|
-| Preamble not detected | `high_count`, `r`, `s` (sample number), `b0` on every edge |
-| Wrong preamble bubble boundaries | `pre_start`, `pre_end`, `s_ring[0..4]` at commit |
-| Wrong field value | `value` after each `CollectBits` call, `start_sample`, `end_sample` |
-| CRC mismatch | Each byte pushed into `crc_buf`, `computed_crc`, `crc_val` |
-| Wrong word count | `num_words`, `frame_type`, `mNWordCount` at the start of the data block |
+```cpp
+// Inside the SyncPreamble while loop, after reading b0:
+FSI_LOG( "edge  sample=%-10llu  b0=%d  high_count=%u  r=%u\n",
+         (unsigned long long)s, (int)b0, high_count, r );
+```
 
-Clear the log before each capture (`rm /tmp/fsi_debug.log`) so output stays
-manageable. On Windows use a path like `C:\Temp\fsi_debug.log`. Rebuild the
-plugin and restart Logic 2 after every code change.
+To log the preamble commit point:
+
+```cpp
+FSI_LOG( "PRE COMMIT  pre_start=%llu  pre_end=%llu\n",
+         (unsigned long long)pre_start, (unsigned long long)pre_end );
+```
+
+To trace each `CollectBits` result in `WorkerThread`:
+
+```cpp
+FSI_LOG( "CollectBits  count=%u  value=0x%llX  start=%llu  end=%llu\n",
+         count, (unsigned long long)value,
+         (unsigned long long)start_sample, (unsigned long long)end_sample );
+```
+
+**Workflow:**
+
+1. Add `FSI_LOG` calls around the suspect code path.
+2. Delete the old log: `rm /tmp/fsi_debug.log`
+3. Rebuild: `cmake --build build/`
+4. Restart Logic 2 and run a short capture.
+5. Read the log: `cat /tmp/fsi_debug.log`
+
+On Windows use `C:\Temp\fsi_debug.log` in place of `/tmp/fsi_debug.log`.
+Remove all `FSI_LOG` calls before committing — they reopen the file on every
+edge and will slow the analyzer significantly on long captures.
 
 ---
 
-### Capture scenario edge cases
+### Attaching GDB (Linux)
 
-If the **first frame is always missed**, the cause is almost always one of two
-scenario-specific issues in `SyncPreamble` / `WorkerThread`:
+Because the plugin is a shared library loaded into Logic 2's process, GDB can
+attach to Logic 2 and set breakpoints directly inside the analyzer code.
 
-**Scenario 1 — CLK starts LOW (MCU boots during capture):**
+```bash
+# 1. Build with debug symbols
+cmake -DCMAKE_BUILD_TYPE=Debug build/
+cmake --build build/
 
-The MCU boot produces one rising CLK edge. If D0 is LOW at that edge,
-`SyncPreamble` resets (`high_count=0; r=0`) — this is correct. The preamble
-that follows then builds `high_count` from zero. If the first frame is still
-missed, log `high_count` and `r` on every edge and confirm that exactly 5
-HIGHs (P1, P2, P3, P4, SOF[0]) accumulate before SOF[1] arrives LOW.
+# 2. Start Logic 2, load a capture, then find its PID
+pgrep -a Logic2
 
-**Scenario 2 — CLK starts HIGH (MCU already running when capture starts):**
+# 3. Attach GDB
+gdb -p <pid>
 
-The cursor sits blocked in `AdvanceToNextEdge` until the first falling clock
-edge — which is preamble bit P1. If the first frame is missed, check whether
-a clock pre-advance has been accidentally introduced at the top of
-`WorkerThread`. There must be **no** call to `AdvanceToNextEdge` or
-`AdvanceToNextClockEdge` before the `while(true)` loop. If one exists,
-it consumes P1 before `SyncPreamble` ever reads it, leaving only P2–SOF[0]
-(4 HIGHs), which is one short of the required 5.
+# 4. Inside GDB — load the analyzer's symbols
+(gdb) sharedlibrary FSIAnalyzer
 
-See `state_machine.md` — "Capture scenarios" section — for complete
-edge-by-edge traces and ring buffer state for both scenarios.
+# 5. Set breakpoints
+(gdb) break FSIAnalyzer::SyncPreamble
+(gdb) break FSIAnalyzer::CollectBits
+(gdb) break FSIAnalyzer::WorkerThread
+
+# 6. Resume and step through the decode
+(gdb) continue
+```
+
+Once stopped inside `SyncPreamble` you can inspect the ring buffer directly:
+
+```
+(gdb) print high_count
+(gdb) print r
+(gdb) print s_ring
+(gdb) print pre_start
+(gdb) print pre_end
+```
+
+---
+
+### Regression testing with testlib
+
+Once you identify a failing input, encode it as a synthetic test using
+`AnalyzerSDK/testlib/` so the fix cannot silently regress. The testlib drives
+`WorkerThread` without Logic 2, feeding edges directly from code.
+
+```cpp
+#include "TestInstance.h"
+#include "MockChannelData.h"
+
+// Build a synthetic PING frame:
+// preamble (1111) + SOF (1001) + FT=0000 + TAG=0000 + EOF=0110 + postamble (1111)
+MockChannelData clk, d0;
+// push alternating clock edges and the corresponding D0 bit values...
+
+AnalyzerTest::Instance inst;
+inst.SetChannelData( clk, d0 );
+inst.RunAnalyzerWorker();
+
+auto& results = inst.GetResults();
+assert( results[0].mType  == FSI_RESULT_PREAMBLE );
+assert( results[1].mType  == FSI_RESULT_FRAME_TYPE );
+assert( results[1].mData1 == FSI_FRAME_TYPE_PING );
+assert( results[2].mType  == FSI_RESULT_TAG );
+assert( results[3].mType  == FSI_RESULT_EOF );
+```
+
+See `AnalyzerSDK/testlib/TestInstance.h` and `MockChannelData.h` for the full
+API. Wire the test target into `CMakeLists.txt` using the pattern in
+`AnalyzerSDK/testlib/CMakeLists.txt`.
 
 | What you want to change | File | Function / location |
 |---|---|---|
