@@ -1173,3 +1173,432 @@ The ring buffer correctly resolves every case:
   with P1..SOF0 precisely; `r%5=0` points directly at P1.
 - **No special-case code needed** for any scenario: one ring-buffer overwrite
   mechanism handles all of them.
+
+---
+
+## Frame formats and bit-level detail
+
+This section describes every FSI field at the bit level, maps each field to
+the code that reads it, and shows the exact wire sequence for each frame type.
+
+---
+
+### Idle state
+
+```
+CLK: ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾  (no edges — clock stopped)
+D0:  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾  (HIGH)
+D1:  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾  (HIGH, 2-lane only)
+```
+
+The FSI clock only runs during frame transmission. Between frames — and before
+the very first frame — CLK is HIGH with no toggling. D0 and D1 are also HIGH.
+The analyzer sits blocked inside `AdvanceToNextClockEdge` → `mClock->AdvanceToNextEdge()`
+until the first falling edge of the preamble.
+
+---
+
+### Complete field map
+
+Every FSI frame contains these fields in order. Whether a field is present
+depends on the frame type (see matrix below).
+
+| # | Field | Bits | Code | 2-lane handling | Expected value / range |
+|---|-------|------|------|-----------------|------------------------|
+| 1 | Preamble | 4 | `SyncPreamble` | both lanes HIGH | 1111 |
+| 2 | SOF | 4 | `SyncPreamble` (consumed) | both lanes | 1001 |
+| 3 | Frame Type | 4 | `CollectBits(4, …, false)` | D0 only | see type codes |
+| 4 | User Data | 8 | `CollectBits(8, …, true)` | interleaved | 0x00–0xFF |
+| 5 | Data Words | N×16 | `CollectBits(16, …, true)` × N | interleaved | 0x0000–0xFFFF each |
+| 6 | CRC | 8 | `CollectBits(8, …, true)` | interleaved | CRC-8 of fields 4+5 |
+| 7 | Frame Tag | 4 | `CollectBits(4, …, false)` | D0 only | 0x0–0xF |
+| 8 | EOF | 4 | `CollectBits(4, …, false)` | D0 only | 0110 (0x6) |
+| 9 | Postamble | 4 | `CollectBits(4, …, false)` (silent) | both lanes HIGH | 1111 |
+
+Fields 1–2 are detected by `SyncPreamble`. Fields 3–9 are collected by
+`WorkerThread`. Fields 4–6 are present only in data frames (see
+`IsDataFrame()`). Field 9 is consumed but not emitted as a Saleae frame.
+
+---
+
+### Frame type codes
+
+Defined in `FSIAnalyzer.h` lines 10–16 and decoded by `FrameTypeName()` at
+line 429.
+
+| Constant | Hex | Binary | Wire label | Data fields? | Word count |
+|---|---|---|---|---|---|
+| `FSI_FRAME_TYPE_PING`  | 0x0 | 0000 | PING      | No  | 0 |
+| `FSI_FRAME_TYPE_NWORD` | 0x3 | 0011 | DATA(Nw)  | Yes | N (settings) |
+| `FSI_FRAME_TYPE_DATA1` | 0x4 | 0100 | DATA(1w)  | Yes | 1 |
+| `FSI_FRAME_TYPE_DATA2` | 0x5 | 0101 | DATA(2w)  | Yes | 2 |
+| `FSI_FRAME_TYPE_DATA4` | 0x6 | 0110 | DATA(4w)  | Yes | 4 |
+| `FSI_FRAME_TYPE_DATA6` | 0x7 | 0111 | DATA(6w)  | Yes | 6 |
+| `FSI_FRAME_TYPE_ERROR` | 0xF | 1111 | ERROR     | No  | 0 |
+
+All other 4-bit codes are reserved. `DataWordCount()` (line 62) returns the
+word count for each type; it returns 0 for PING, ERROR, and unknown codes.
+`IsDataFrame()` (line 76) returns true for NWORD, DATA1, DATA2, DATA4, DATA6.
+
+---
+
+### Field-by-field bit detail
+
+#### Preamble (4 bits)
+
+```
+D0: 1  1  1  1
+    ↑  ↑  ↑  ↑
+    P1 P2 P3 P4   (all HIGH, clock running, indistinguishable from extended idle)
+```
+
+Four consecutive HIGH bits on every clock edge. Since idle is also HIGH,
+the preamble is not inherently distinguishable from idle — it is the SOF
+pattern immediately following that proves a frame has started.
+
+The preamble is not directly collected by `CollectBits`. `SyncPreamble` scans
+for it implicitly by counting consecutive HIGH bits until the count reaches
+≥ 5, then checking the next three bits for the SOF[1,2,3] = 0,0,1 pattern.
+
+**Saleae result:** `FSI_RESULT_PREAMBLE` (0x00). `mData1=0, mData2=0,
+mFlags=0`. Bubble spans from P1 sample to SOF[0] sample. SOF[1,2,3] are
+consumed silently — they appear as unlabeled bits between the PRE and FT
+bubbles.
+
+---
+
+#### SOF — Start of Frame (4 bits)
+
+```
+D0: 1  0  0  1
+    ↑  ↑  ↑  ↑
+   [0][1][2][3]   SOF bit indices
+```
+
+The fixed pattern 1001 immediately follows the preamble HIGHs. The analyzer
+detects it as part of `SyncPreamble`:
+
+- SOF[0] = 1 (HIGH): counted as the 5th (or more) consecutive HIGH in the
+  ring buffer. This is the last sample stored in the ring and becomes `pre_end`.
+- SOF[1] = 0 (LOW): triggers the SOF check branch (`high_count >= 5`).
+- SOF[2] = 0 (LOW): read as `b2`, confirmed LOW.
+- SOF[3] = 1 (HIGH): read as `b3`, confirmed HIGH. Frame start confirmed.
+  `frame_start_sample = s3` (the sample number of SOF[3]).
+
+SOF is never emitted as its own Saleae frame. It is validated then discarded.
+
+---
+
+#### Frame Type (4 bits) — control field
+
+```
+Code example — DATA(1w) = 0x4 = 0100:
+D0: 0  1  0  0
+    ↑  ↑  ↑  ↑
+   b3 b2 b1 b0   (MSB first)
+```
+
+Collected by `CollectBits(4, ft_val, ft_start, ft_end, false)` at line 300.
+`interleaved=false`: in 2-lane mode D0 and D1 both carry the full identical
+4-bit field; the analyzer reads D0 only.
+
+The 4 bits are shifted in MSB-first: each edge shifts `value` left 1 and ORs
+the D0 bit into bit 0. After 4 edges `value` holds the complete 4-bit code.
+
+**Saleae result:** `FSI_RESULT_FRAME_TYPE` (0x01). `mData1 = frame_type (0x0–0xF)`.
+FrameV2 adds `"type"` string (e.g. `"DATA(1w)"`) and `"value"` integer.
+
+---
+
+#### User Data (8 bits) — data frames only, data field
+
+```
+1-lane example — value 0xA5 = 10100101:
+D0: 1  0  1  0  0  1  0  1
+    ↑  ↑  ↑  ↑  ↑  ↑  ↑  ↑
+   b7 b6 b5 b4 b3 b2 b1 b0   (MSB first, 8 edges from D0)
+
+2-lane example — same value 0xA5:
+       Edge 0       Edge 1       Edge 2       Edge 3
+D0:    1   (b7)     1   (b5)     0   (b3)     0   (b1)
+D1:    0   (b6)     0   (b4)     1   (b2)     1   (b0)
+```
+
+Collected by `CollectBits(8, ud_val, ud_start, ud_end, true)` at line 324.
+
+- **1-lane** (`interleaved=true`, `mTwoLane=false`): falls through to the
+  1-lane branch (line 147), reads 8 edges from D0, shifts MSB-first.
+- **2-lane** (`interleaved=true`, `mTwoLane=true`): takes the 2-lane branch
+  (line 125). `edges = (8+1)/2 = 4`. Each of the 4 edges contributes
+  `D0 → even-position bit` then `D1 → odd-position bit`, both shifted left
+  into `value`. After 4 edges: `value = D0[e0] D1[e0] D0[e1] D1[e1] D0[e2]
+  D1[e2] D0[e3] D1[e3]` = bits 7,6,5,4,3,2,1,0.
+
+User Data is pushed first into `crc_buf` (line 326) before data words.
+
+**Saleae result:** `FSI_RESULT_USERDATA` (0x03). `mData1 = user_data (0x00–0xFF)`.
+
+---
+
+#### Data Words (16 bits each, N words) — data frames only, data field
+
+```
+1-lane example — word value 0x1234:
+D0: 0 0 0 1 0 0 1 0 0 0 1 1 0 1 0 0
+   b15 ...                        b0  (MSB first, 16 edges)
+
+2-lane example — same value 0x1234 = 0001 0010 0011 0100:
+       E0     E1     E2     E3     E4     E5     E6     E7
+D0:  0(b15) 0(b13) 1(b11) 0(b9) 0(b7) 1(b5) 0(b3) 0(b1)
+D1:  0(b14) 1(b12) 0(b10) 0(b8) 0(b6) 1(b4) 1(b2) 0(b0)
+```
+
+Collected by `CollectBits(16, word_val, ws, we, true)` at line 345, once per
+word in a loop (`for w = 0 .. num_words-1`).
+
+- **2-lane**: `edges = (16+1)/2 = 8` (integer division rounds down to 8,
+  which is exactly 16/2). All 16 bits covered, no partial edge.
+- Word index `w` (zero-based) is stored in `mData2` and shown in the bubble
+  label as `Data[n]`.
+
+Each word is fed into `crc_buf` **LSB first then MSB** (lines 346–347):
+
+```cpp
+crc_buf.push_back( (U8)( word_val      ) );   // bits [7:0]  — LSB
+crc_buf.push_back( (U8)( word_val >> 8 ) );   // bits [15:8] — MSB
+```
+
+This byte order matches the FSI TRM CRC specification (little-endian per
+word for CRC purposes, regardless of the MSB-first wire order).
+
+**Saleae result:** `FSI_RESULT_DATA_WORD` (0x04). `mData1 = word_val (16-bit)`,
+`mData2 = word_index (0-based)`, `mFlags = 0`.
+
+---
+
+#### CRC (8 bits) — data frames only, data field
+
+```
+1-lane: 8 edges from D0, MSB first.
+2-lane: 4 edges, interleaved same as User Data.
+```
+
+Collected by `CollectBits(8, crc_val, cs, ce, true)` at line 362. After
+collection, `ComputeCRC(crc_buf)` (line 363) computes the expected CRC over
+the bytes accumulated in `crc_buf` and compares:
+
+```cpp
+bool crc_ok = ( (U8)crc_val == computed_crc );   // line 364
+```
+
+**CRC algorithm:** CRC-8, polynomial `x^8 + x^2 + x + 1` (0x07), seed
+`0x00`, no final XOR. Implemented as a 256-entry lookup table `kFsiCrcTable`.
+
+**CRC input byte order:**
+1. User Data byte (1 byte)
+2. Word 0: byte[0] = bits[7:0] (LSB), byte[1] = bits[15:8] (MSB)
+3. Word 1: byte[0] = bits[7:0], byte[1] = bits[15:8]
+4. … (one pair per data word)
+
+Frame Type and Frame Tag are **not** included in the CRC.
+
+**Saleae result:** `FSI_RESULT_CRC` (0x05).
+
+| Field | Contains |
+|---|---|
+| `mData1` | Received CRC byte from wire (displayed in bubble) |
+| `mData2` | Computed (expected) CRC value |
+| `mFlags` | Bit 0 = 1 if CRC matched, 0 if CRC failed |
+
+FrameV2 adds `"received"`, `"expected"`, and `"status"` (`"OK"` or `"FAIL"`).
+The bubble shows `CRC: 0xNN OK` or `CRC: 0xNN [BAD]`.
+
+---
+
+#### Frame Tag (4 bits) — control field
+
+```
+Example — tag value 0x5 = 0101:
+D0: 0  1  0  1
+    ↑  ↑  ↑  ↑
+   b3 b2 b1 b0   (MSB first)
+```
+
+A user-defined 4-bit identifier (0x0–0xF). Firmware sets this to distinguish
+between frame sources or message types. The analyzer does not interpret its
+value — it is passed through as-is.
+
+Collected by `CollectBits(4, tag_val, tag_start, tag_end, false)` at line 381.
+`interleaved=false`: D0 only in both 1-lane and 2-lane mode.
+
+Present in **all** frame types including PING and ERROR. Collected after the
+data fields block (or immediately after Frame Type for PING/ERROR).
+
+**Saleae result:** `FSI_RESULT_TAG` (0x02). `mData1 = tag_val (0x0–0xF)`.
+
+---
+
+#### EOF — End of Frame (4 bits) — control field
+
+```
+Fixed pattern 0110:
+D0: 0  1  1  0
+    ↑  ↑  ↑  ↑
+   b3 b2 b1 b0
+```
+
+Collected by `CollectBits(4, eof_val, es, ee, false)` at line 397. The value
+is compared against `0x6` (binary 0110) at line 398:
+
+```cpp
+bool eof_ok = ( eof_val == 0x6 );   // 0110
+```
+
+`interleaved=false`: D0 only. In 2-lane mode D1 carries the same pattern but
+is not read.
+
+**Saleae result:**
+- Match: `FSI_RESULT_EOF` (0x06). `mData1 = 0x6`.
+- Mismatch: `FSI_RESULT_ERROR` (0xFF). `mData1 = received_value`.
+
+In both cases `mData2 = 0`, `mFlags = 0`.
+
+---
+
+#### Postamble (4 bits) — control field
+
+```
+Fixed pattern 1111 (all HIGH, mirrors preamble):
+D0: 1  1  1  1
+```
+
+Collected by `CollectBits(4, post_val, ps, pe, false)` at line 413 but the
+collected value is **never validated and never emitted** as a Saleae frame.
+The postamble's purpose is to drive lines back to idle HIGH before CLK
+stops. After this collection, `CommitResults()` is called and the loop
+returns to `SyncPreamble` for the next frame.
+
+---
+
+### Frame type presence matrix
+
+Which fields appear on the wire for each frame type:
+
+| Field | PING (0000) | ERROR (1111) | DATA(1w) (0100) | DATA(2w) (0101) | DATA(4w) (0110) | DATA(6w) (0111) | DATA(Nw) (0011) |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| Preamble + SOF | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Frame Type | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| User Data | — | — | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Data Words | — | — | 1 word | 2 words | 4 words | 6 words | N words |
+| CRC | — | — | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Frame Tag | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| EOF | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Postamble | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+
+---
+
+### Complete wire bit streams
+
+One bit per clock edge, MSB first within each field.
+
+#### PING frame (no data, 1-lane)
+
+```
+Total bits: 4+4+4+4+4+4 = 24 clock edges
+
+ ← preamble → ← SOF → ← FT  → ← TAG  → ← EOF  → ← post →
+  1  1  1  1   1  0  0  1   0  0  0  0   t  t  t  t   0  1  1  0   1  1  1  1
+ [P1][P2][P3][P4][S0][S1][S2][S3][f3][f2][f1][f0][g3][g2][g1][g0][e3][e2][e1][e0][q3][q2][q1][q0]
+
+S1,S2,S3 = SOF[1,2,3] consumed silently (no bubble)
+FT = 0000 (PING)
+TAG = user-defined 4-bit value (shown as t)
+EOF = 0110
+```
+
+Saleae bubbles emitted in order: `PRE | PING | TAG | EOF`
+
+---
+
+#### ERROR frame (no data, 1-lane)
+
+```
+Total bits: 4+4+4+4+4+4 = 24 clock edges
+
+ ← preamble → ← SOF → ← FT  → ← TAG  → ← EOF  → ← post →
+  1  1  1  1   1  0  0  1   1  1  1  1   t  t  t  t   0  1  1  0   1  1  1  1
+                            [f3][f2][f1][f0]
+                             FT = 1111 (ERROR)
+```
+
+Saleae bubbles: `PRE | ERROR | TAG | EOF`
+
+---
+
+#### DATA(1w) frame (1 data word, 1-lane)
+
+```
+Total bits: 4+4 + 4 + 8 + 16 + 8 + 4 + 4 + 4 = 56 clock edges
+
+ ←pre→ ←SOF→  ←FT→   ←── user data (8) ──→  ←────── data word 0 (16) ──────→  ←── CRC (8) ──→  ←TAG→  ←EOF→  ←post→
+  1111  1001   0100   ud7 ud6 ud5 ud4 ud3 ud2 ud1 ud0   w15 w14 w13 ... w1 w0   c7 c6 c5 c4 c3 c2 c1 c0   tttt   0110   1111
+```
+
+Saleae bubbles: `PRE | DATA(1w) | UD | D[0] | CRC | TAG | EOF`
+
+---
+
+#### DATA(2w) frame (2 data words, 2-lane)
+
+In 2-lane mode, data fields (User Data, Data Words, CRC) each consume half as
+many clock edges because each edge delivers two bits. Control fields (FT, TAG,
+EOF, Postamble) still consume 4 edges from D0 only.
+
+```
+Total clock edges: 4+4 + 4 + 4 + 8 + 4 + 4 + 4 + 4 = 40 edges
+  (preamble+SOF: 8, FT: 4, UD: 4 edges×2bits, Word0: 8 edges×2bits,
+   Word1: 8 edges×2bits, CRC: 4 edges×2bits, TAG: 4, EOF: 4, Post: 4)
+
+Frame Type (4 edges, D0 only):
+  CLK edge:  1     2     3     4
+  D0:        f3    f2    f1    f0     ← FT = 0101 for DATA(2w)
+  D1:        f3    f2    f1    f0     (identical, not read)
+
+User Data (4 edges, interleaved):
+  CLK edge:  1     2     3     4
+  D0:        ud7   ud5   ud3   ud1   ← even-position bits
+  D1:        ud6   ud4   ud2   ud0   ← odd-position bits
+  Assembled: ud7 ud6  ud5 ud4  ud3 ud2  ud1 ud0  = 0xNN
+
+Data Word 0 (8 edges, interleaved):
+  CLK edge:  1     2     3     4     5     6     7     8
+  D0:       w15   w13   w11    w9    w7    w5    w3    w1
+  D1:       w14   w12   w10    w8    w6    w4    w2    w0
+
+Data Word 1 (8 edges, interleaved) — same pattern as word 0.
+
+CRC (4 edges, interleaved):
+  CLK edge:  1     2     3     4
+  D0:        c7    c5    c3    c1
+  D1:        c6    c4    c2    c0
+```
+
+Saleae bubbles: `PRE | DATA(2w) | UD | D[0] | D[1] | CRC | TAG | EOF`
+
+---
+
+### Saleae result frame storage summary
+
+All fields stored using `mResults->AddFrame()` (legacy V1) and
+`mResults->AddFrameV2()` simultaneously.
+
+| FSI_RESULT_* | mType | mData1 | mData2 | mFlags |
+|---|---|---|---|---|
+| PREAMBLE   (0x00) | 0x00 | 0 | 0 | 0 |
+| FRAME_TYPE (0x01) | 0x01 | frame type code (0x0–0xF) | 0 | 0 |
+| TAG        (0x02) | 0x02 | tag value (0x0–0xF) | 0 | 0 |
+| USERDATA   (0x03) | 0x03 | user data byte (0x00–0xFF) | 0 | 0 |
+| DATA_WORD  (0x04) | 0x04 | 16-bit word value | word index (0-based) | 0 |
+| CRC        (0x05) | 0x05 | received CRC byte | computed CRC byte | bit 0: 1=OK 0=FAIL |
+| EOF        (0x06) | 0x06 | 0x6 | 0 | 0 |
+| ERROR      (0xFF) | 0xFF | received EOF value (≠ 0x6) | 0 | 0 |
