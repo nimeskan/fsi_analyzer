@@ -320,7 +320,162 @@ interleaving), and `ComputeCRC` (known byte vectors with expected outputs).
 
 ---
 
-## Key source locations
+## Debugging
+
+### Failure mode quick reference
+
+Start by identifying which symptom you have. Each maps to a narrow set of causes.
+
+| Symptom | Most likely cause |
+|---|---|
+| No bubbles at all | Wrong channel assignment; sample rate below 4 MS/s |
+| PRE bubble appears, then nothing | Frame Type read failing — check 2-lane mode setting |
+| PRE bubble spans too many bits | SOF[0] not landing where expected — verify clock edges are clean |
+| CRC BAD on every frame | N-Word Frame Count setting does not match firmware; or sample rate marginal |
+| ERR bubble instead of EOF | Framing lost — decoder consumed wrong number of bits upstream |
+| Data word values look shifted | 2-Lane Mode on/off mismatch, or TXD0/TXD1 swapped |
+| First frame always missed | See capture scenario notes below |
+| Only first frame decoded | Short inter-frame gap — postamble/preamble HIGH bits merging |
+
+---
+
+### Step 1 — Verify the raw waveform before touching the analyzer
+
+Before changing any code, confirm the capture itself is valid:
+
+1. Zoom into the Logic 2 waveform to the individual-edge level on TXCLK and TXD0.
+2. Manually count the preamble (4 HIGH edges), SOF (1,0,0,1), and the first few
+   Frame Type bits. If the raw waveform does not match the protocol, the problem
+   is in hardware or sample rate, not the analyzer.
+3. Measure the CLK period in the timing view. Confirm your sample rate is at
+   least 4× the FSI clock. At marginal sample rates, edge detection errors flip
+   bits silently.
+
+---
+
+### Step 2 — Use the CSV export as a ground truth
+
+**Analyzers → Export → Export as CSV** produces one row per decoded field with
+start and end sample numbers. Cross-check:
+
+- Does every frame contain the expected field sequence?
+- Do `Type` values match what firmware is sending?
+- Is `CRC OK` or `FAIL`? If FAIL, compare `Value` (received) to the expected
+  CRC computed by hand or firmware.
+- Are `Start Sample` and `End Sample` plausible given your clock frequency?
+
+This is often faster than attaching a debugger.
+
+---
+
+### Step 3 — Add file logging to the plugin
+
+Logic 2 does not expose a console for plugin output, but the plugin can write
+to a log file. Insert logging around the suspect code path:
+
+```cpp
+// Temporary — remove before release
+#include <cstdio>
+
+// Inside SyncPreamble or WorkerThread:
+FILE* dbg = fopen( "/tmp/fsi_debug.log", "a" );
+fprintf( dbg, "high_count=%u  r=%u  sample=%llu\n",
+         high_count, r, (unsigned long long)s );
+fclose( dbg );
+```
+
+Clear the log before each capture (`rm /tmp/fsi_debug.log`) so output stays
+manageable. On Windows use a path like `C:\Temp\fsi_debug.log`.
+
+Rebuild after adding logging, restart Logic 2, run a short capture, then
+inspect the log file.
+
+---
+
+### Step 4 — Attach a debugger (Linux)
+
+Because the plugin is a shared library loaded into Logic 2's process, you can
+attach GDB to Logic 2 and set breakpoints in the analyzer code:
+
+```bash
+# Build with debug symbols
+cd build
+cmake .. -DCMAKE_BUILD_TYPE=Debug
+cmake --build .
+
+# Find Logic 2's PID after loading a capture
+pgrep -a Logic2
+
+# Attach GDB
+gdb -p <pid>
+
+# Inside GDB — wait for the shared library to load if needed
+(gdb) sharedlibrary FSIAnalyzer
+(gdb) break FSIAnalyzer::SyncPreamble
+(gdb) break FSIAnalyzer::CollectBits
+(gdb) continue
+```
+
+Step through `SyncPreamble` to watch `high_count`, `r`, and `s_ring` evolve
+in real time. Check that `pre_start` and `pre_end` resolve to the correct
+sample numbers before the function returns.
+
+---
+
+### Step 5 — Isolate with the simplest possible frame
+
+If data frames are failing, try a **PING frame** first. PING has no User Data,
+Data Words, or CRC — just preamble, Frame Type (0000), Frame Tag, EOF, and
+postamble. If PING decodes correctly, the preamble sync is working and the
+problem is in the data-field collection path.
+
+Escalate in order: PING → ERROR → DATA(1w) → DATA(2w) → DATA(Nw).
+
+---
+
+### Step 6 — Check capture scenario edge cases
+
+Two capture scenarios can cause the first frame to be missed:
+
+**Scenario 1 (CLK starts LOW — MCU boots during capture):**
+The first clock edge (boot edge) has D0=LOW and resets `SyncPreamble`. This is
+correct. If the first frame is still not decoded, check whether there are enough
+HIGH edges in the preamble after the reset (need ≥ 5 before SOF[1]).
+
+**Scenario 2 (CLK starts HIGH — MCU already running):**
+The clock cursor sits idle until the first falling edge. If the first frame is
+missed, verify the cursor is not being pre-advanced. The `WorkerThread` must
+**not** call `AdvanceToNextEdge` before entering the `while(true)` loop. The
+current code has no pre-advance — if this was accidentally re-introduced, the
+first preamble bit is consumed before `SyncPreamble` ever reads it.
+
+See `state_machine.md` — "Capture scenarios" section — for full edge-by-edge
+traces of both scenarios.
+
+---
+
+### Step 7 — Use the testlib for repeatable regression testing
+
+Once you identify the failing input, encode it as a `MockChannelData` test so
+it cannot regress. Example structure:
+
+```cpp
+// Synthetic PING frame — preamble + SOF + FT(0000) + TAG(0) + EOF(0110) + postamble
+MockChannelData clk, d0;
+// push clock edges and D0 values matching the protocol bit stream
+// ...
+AnalyzerTest::Instance inst;
+inst.SetChannelData( clk, d0 );
+inst.RunAnalyzerWorker();
+auto results = inst.GetResults();
+assert( results[0].mType == FSI_RESULT_PREAMBLE );
+assert( results[1].mType == FSI_RESULT_FRAME_TYPE );
+assert( results[1].mData1 == FSI_FRAME_TYPE_PING );
+```
+
+See `AnalyzerSDK/testlib/TestInstance.h` and `MockChannelData.h` for the full
+API. Wire the test target into `CMakeLists.txt` using the pattern in
+`AnalyzerSDK/testlib/CMakeLists.txt`.
 
 | What you want to change | File | Function / location |
 |---|---|---|
