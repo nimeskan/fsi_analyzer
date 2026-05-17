@@ -816,118 +816,48 @@ completely invisible to the analyzer — it never sees it.
 
 ### Scenario 1 — CLK starts LOW (MCU boots during capture)
 
-The capture begins with CLK=LOW and D0=LOW (MCU not yet configured).
-
-```
-Time →
-CLK: ____|‾|_|‾|_|‾|_|‾|_|‾|___|‾‾‾‾‾‾‾‾‾‾‾‾‾|_|‾|_|‾|_|‾|_|‾|_|‾|_|‾|_|‾|_|‾|_|...
-D0:  ______|‾|__|‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾|‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾...
-      ↑boot ↑flush data pulse      ↑flush 10 CLK edges  ↑idle    ↑preamble starts
-      edge   (no CLK edges)         (D0=HIGH throughout)  gap
-```
+The capture begins with CLK=LOW and D0=LOW (MCU not yet configured). The MCU
+then boots, configuring FSI so CLK and D0 both go HIGH — producing one rising
+edge on CLK with D0=LOW (the boot edge). The boot edge fires a reset inside
+`SyncPreamble` (`high_count=0; r=0`). The firmware then issues a flush: D0
+pulses LOW then back HIGH while CLK stays idle (invisible to the analyzer), and
+then CLK runs 10 flush edges with D0=HIGH, followed by an idle gap and then the
+normal preamble+frame.
 
 Edge-by-edge trace through `SyncPreamble`:
 
-| Edge # | CLK edge | D0 | high_count | r | s_ring[r%5] written |
-|--------|----------|----|------------|---|---------------------|
-| 1 | boot: CLK↑ | LOW | 0 (reset) | 0 | — |
-| 2 | flush D0 pulse: no CLK edges — **not seen** | — | — | — | — |
-| 3 | flush CLK↓ (edge 1 of 10) | HIGH | 1 | 1 | s_ring[1] = F1 |
-| 4 | flush CLK↑ (edge 2 of 10) | HIGH | 2 | 2 | s_ring[2] = F2 |
-| 5 | flush CLK↓ (edge 3 of 10) | HIGH | 3 | 3 | s_ring[3] = F3 |
-| 6 | flush CLK↑ (edge 4 of 10) | HIGH | 4 | 4 | s_ring[4] = F4 |
-| 7 | flush CLK↓ (edge 5 of 10) | HIGH | 5 | 5 | s_ring[0] = F5 |
-| 8 | flush CLK↑ (edge 6 of 10) | HIGH | 6 | 6 | s_ring[1] = F6 |
-| 9 | flush CLK↓ (edge 7 of 10) | HIGH | 7 | 7 | s_ring[2] = F7 |
-| 10 | flush CLK↑ (edge 8 of 10) | HIGH | 8 | 8 | s_ring[3] = F8 |
-| 11 | flush CLK↓ (edge 9 of 10) | HIGH | 9 | 9 | s_ring[4] = F9 |
-| 12 | flush CLK↑ (edge 10 of 10) | HIGH | 10 | 10 | s_ring[0] = F10 |
-| — | idle gap — CLK stays HIGH, no edges | — | — | — | — |
-| 13 | preamble P1: CLK↓ | HIGH | 11 | 11 | s_ring[1] = P1 |
-| 14 | preamble P2: CLK↑ | HIGH | 12 | 12 | s_ring[2] = P2 |
-| 15 | preamble P3: CLK↓ | HIGH | 13 | 13 | s_ring[3] = P3 |
-| 16 | preamble P4: CLK↑ | HIGH | 14 | 14 | s_ring[4] = P4 |
-| 17 | SOF[0]: CLK↓ | HIGH | 15 | 15 | s_ring[0] = SOF0 |
-| 18 | SOF[1]: CLK↑ | **LOW** | reset | — | — |
+| Event | D0 | high_count | r (before++) | Slot (r%5) | Sample stored |
+|---|---|---|---|---|---|
+| Boot CLK↑ | LOW | 0 (reset) | — | — | — |
+| D0 flush pulse — no CLK edges | — | — | — | — | **not seen** |
+| Flush CLK↓ (1 of 10) | HIGH | 1 | 0 | 0 | F1 |
+| Flush CLK↑ (2 of 10) | HIGH | 2 | 1 | 1 | F2 |
+| Flush CLK↓ (3 of 10) | HIGH | 3 | 2 | 2 | F3 |
+| Flush CLK↑ (4 of 10) | HIGH | 4 | 3 | 3 | F4 |
+| Flush CLK↓ (5 of 10) | HIGH | 5 | 4 | 4 | F5 |
+| Flush CLK↑ (6 of 10) | HIGH | 6 | 5 | 0 | F6 ← overwrites F1 |
+| Flush CLK↓ (7 of 10) | HIGH | 7 | 6 | 1 | F7 ← overwrites F2 |
+| Flush CLK↑ (8 of 10) | HIGH | 8 | 7 | 2 | F8 |
+| Flush CLK↓ (9 of 10) | HIGH | 9 | 8 | 3 | F9 |
+| Flush CLK↑ (10 of 10) | HIGH | 10 | 9 | 4 | F10 |
+| Idle gap — CLK stays HIGH, no edges | — | — | — | — | — |
+| Preamble P1: CLK↓ | HIGH | 11 | 10 | 0 | P1 ← overwrites F6 |
+| Preamble P2: CLK↑ | HIGH | 12 | 11 | 1 | P2 ← overwrites F7 |
+| Preamble P3: CLK↓ | HIGH | 13 | 12 | 2 | P3 ← overwrites F8 |
+| Preamble P4: CLK↑ | HIGH | 14 | 13 | 3 | P4 ← overwrites F9 |
+| SOF[0]: CLK↓ | HIGH | 15 | 14 | 4 | SOF0 ← overwrites F10 |
+| SOF[1]: CLK↑ | **LOW** | — | — | SOF check triggered | |
 
-At edge 18, `high_count=15 ≥ 5` so we enter the SOF check:
-
-- Read b2 (SOF[2]): LOW ✓
-- Read b3 (SOF[3]): HIGH ✓ → SOF confirmed.
-
-Ring buffer state at commit:
-```
-r = 15 (after 15 HIGHs)
-s_ring[0] = SOF0,  s_ring[1] = P1,  s_ring[2] = P2
-s_ring[3] = P3,    s_ring[4] = P4
-
-pre_start = s_ring[r % 5]     = s_ring[15 % 5] = s_ring[0] = SOF0
-```
-
-Wait — that gives SOF0 as pre_start. Let me re-check the code:
-
-```cpp
-U64 pre_start = ( r >= 5 ) ? s_ring[ r % 5 ] : s_ring[ 0 ];
-```
-
-With `r=15`: `s_ring[15%5] = s_ring[0] = SOF0`.  But `r` was
-incremented AFTER writing to `s_ring[r%5]`, so `s_ring[r%5]` at
-the time of the commit is the slot that is **about to be overwritten**
-— it currently holds the value written when `r` was a multiple of 5,
-which is the oldest entry still in the ring.
-
-Stepping through the overwrites:
-
-| r (before increment) | slot written | value |
-|---|---|---|
-| 0 | s_ring[0] | boot LOW — not stored (D0=LOW, so no write) |
-| 1..5 | s_ring[1..0] | F1..F5 |
-| 6..10 | s_ring[1..0] | F6..F10 overwrite F1..F5 |
-| 11..15 | s_ring[1..0] | P1..SOF0 overwrite F6..F10 |
-
-After edge 17 (SOF[0], r incremented to 15), the ring contains:
+`high_count = 15 ≥ 5` → enter SOF check: b2=LOW ✓, b3=HIGH ✓. Ring state after SOF[0] (`r = 15`):
 
 ```
-s_ring[0] = SOF0  (written at r=14, slot 14%5=4? No wait...)
+s_ring[0] = P1    s_ring[1] = P2    s_ring[2] = P3
+s_ring[3] = P4    s_ring[4] = SOF0
 ```
 
-Let me redo this carefully. The code is:
-
-```cpp
-s_ring[ r % 5 ] = s;
-r++;
 ```
-
-So `r` is the value **before** the increment when the sample is stored.
-
-| D0=HIGH edge # | r (before++) | slot | sample stored |
-|---|---|---|---|
-| 1 (F1) | 0 | 0 | F1 |
-| 2 (F2) | 1 | 1 | F2 |
-| 3 (F3) | 2 | 2 | F3 |
-| 4 (F4) | 3 | 3 | F4 |
-| 5 (F5) | 4 | 4 | F5 |
-| 6 (F6) | 5 | 0 | F6  ← overwrites F1 |
-| 7 (F7) | 6 | 1 | F7  ← overwrites F2 |
-| 8 (F8) | 7 | 2 | F8 |
-| 9 (F9) | 8 | 3 | F9 |
-| 10 (F10)| 9 | 4 | F10|
-| 11 (P1) | 10| 0 | P1  ← overwrites F6 |
-| 12 (P2) | 11| 1 | P2 |
-| 13 (P3) | 12| 2 | P3 |
-| 14 (P4) | 13| 3 | P4 |
-| 15 (SOF0)| 14| 4 | SOF0|
-
-After edge 17, `r = 15`. Ring contents:
-
-```
-s_ring[0]=P1, s_ring[1]=P2, s_ring[2]=P3, s_ring[3]=P4, s_ring[4]=SOF0
-```
-
-At the SOF check commit:
-```
-pre_start = s_ring[r % 5] = s_ring[15 % 5] = s_ring[0] = P1  ✓
-pre_end   = s_ring[(r-1+5) % 5] = s_ring[(14+5) % 5] = s_ring[19 % 5] = s_ring[4] = SOF0  ✓
+pre_start = s_ring[r % 5]       = s_ring[15 % 5] = s_ring[0] = P1    ✓
+pre_end   = s_ring[(r-1+5) % 5] = s_ring[19 % 5] = s_ring[4] = SOF0  ✓
 ```
 
 **Result: preamble bubble spans P1 → SOF0. Correct.**
@@ -935,53 +865,44 @@ pre_end   = s_ring[(r-1+5) % 5] = s_ring[(14+5) % 5] = s_ring[19 % 5] = s_ring[4
 ### Scenario 2 — CLK starts HIGH (MCU already running when capture starts)
 
 The capture begins mid-idle: CLK=HIGH, D0=HIGH. The MCU then issues a flush,
-followed by an idle gap and then a normal frame.
-
-```
-Time →
-CLK: ‾‾‾‾‾‾‾|_|‾|_|‾|_|‾|_|‾|_|‾|___|‾‾‾‾‾‾‾‾‾‾‾‾‾|_|‾|_|‾|_|‾|_|‾|_|‾|_|‾|_|‾|_|‾|_|...
-D0:  ‾‾‾‾‾‾‾‾‾‾|_|‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾|‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾...
-      ↑capture  ↑flush data pulse      ↑flush 10 CLK edges  ↑idle    ↑preamble starts
-      starts     (no CLK edges)         (D0=HIGH throughout)  gap
-      CLK=HIGH
-```
-
-There is no init clock pre-advance (that code was removed). The first
+followed by an idle gap and then a normal frame. There is no init clock
+pre-advance (that code was removed). The first
 `AdvanceToNextClockEdge` call blocks until the first actual clock edge, which
 is the first falling edge of the flush CLK cycles.
 
-Edge-by-edge trace:
+Edge-by-edge trace through `SyncPreamble`:
 
-| Edge # | CLK edge | D0 | high_count | r (before++) | slot | sample |
-|--------|----------|----|------------|---|---|---|
-| — | D0 pulse (no CLK) | — | — | — | — | — |
-| 1 | flush CLK↓ (edge 1 of 10) | HIGH | 1 | 0 | 0 | F1 |
-| 2 | flush CLK↑ (edge 2 of 10) | HIGH | 2 | 1 | 1 | F2 |
-| 3 | flush CLK↓ (edge 3 of 10) | HIGH | 3 | 2 | 2 | F3 |
-| 4 | flush CLK↑ (edge 4 of 10) | HIGH | 4 | 3 | 3 | F4 |
-| 5 | flush CLK↓ (edge 5 of 10) | HIGH | 5 | 4 | 4 | F5 |
-| 6 | flush CLK↑ (edge 6 of 10) | HIGH | 6 | 5 | 0 | F6 |
-| 7 | flush CLK↓ (edge 7 of 10) | HIGH | 7 | 6 | 1 | F7 |
-| 8 | flush CLK↑ (edge 8 of 10) | HIGH | 8 | 7 | 2 | F8 |
-| 9 | flush CLK↓ (edge 9 of 10) | HIGH | 9 | 8 | 3 | F9 |
-| 10 | flush CLK↑ (edge 10 of 10) | HIGH | 10 | 9 | 4 | F10 |
-| — | idle gap | — | — | — | — | — |
-| 11 | preamble P1: CLK↓ | HIGH | 11 | 10 | 0 | P1 |
-| 12 | preamble P2: CLK↑ | HIGH | 12 | 11 | 1 | P2 |
-| 13 | preamble P3: CLK↓ | HIGH | 13 | 12 | 2 | P3 |
-| 14 | preamble P4: CLK↑ | HIGH | 14 | 13 | 3 | P4 |
-| 15 | SOF[0]: CLK↓ | HIGH | 15 | 14 | 4 | SOF0 |
-| 16 | SOF[1]: CLK↑ | **LOW** | reset | — | — | — |
+| Event | D0 | high_count | r (before++) | Slot (r%5) | Sample stored |
+|---|---|---|---|---|---|
+| D0 flush pulse — no CLK edges | — | — | — | — | **not seen** |
+| Flush CLK↓ (1 of 10) | HIGH | 1 | 0 | 0 | F1 |
+| Flush CLK↑ (2 of 10) | HIGH | 2 | 1 | 1 | F2 |
+| Flush CLK↓ (3 of 10) | HIGH | 3 | 2 | 2 | F3 |
+| Flush CLK↑ (4 of 10) | HIGH | 4 | 3 | 3 | F4 |
+| Flush CLK↓ (5 of 10) | HIGH | 5 | 4 | 4 | F5 |
+| Flush CLK↑ (6 of 10) | HIGH | 6 | 5 | 0 | F6 ← overwrites F1 |
+| Flush CLK↓ (7 of 10) | HIGH | 7 | 6 | 1 | F7 ← overwrites F2 |
+| Flush CLK↑ (8 of 10) | HIGH | 8 | 7 | 2 | F8 |
+| Flush CLK↓ (9 of 10) | HIGH | 9 | 8 | 3 | F9 |
+| Flush CLK↑ (10 of 10) | HIGH | 10 | 9 | 4 | F10 |
+| Idle gap — CLK stays HIGH, no edges | — | — | — | — | — |
+| Preamble P1: CLK↓ | HIGH | 11 | 10 | 0 | P1 ← overwrites F6 |
+| Preamble P2: CLK↑ | HIGH | 12 | 11 | 1 | P2 ← overwrites F7 |
+| Preamble P3: CLK↓ | HIGH | 13 | 12 | 2 | P3 ← overwrites F8 |
+| Preamble P4: CLK↑ | HIGH | 14 | 13 | 3 | P4 ← overwrites F9 |
+| SOF[0]: CLK↓ | HIGH | 15 | 14 | 4 | SOF0 ← overwrites F10 |
+| SOF[1]: CLK↑ | **LOW** | — | — | SOF check triggered | |
 
-`high_count = 15 ≥ 5` → enter SOF check. Ring state after edge 15 (`r = 15`):
-
-```
-s_ring[0]=P1, s_ring[1]=P2, s_ring[2]=P3, s_ring[3]=P4, s_ring[4]=SOF0
-```
+`high_count = 15 ≥ 5` → enter SOF check: b2=LOW ✓, b3=HIGH ✓. Ring state after SOF[0] (`r = 15`):
 
 ```
-pre_start = s_ring[15 % 5] = s_ring[0] = P1   ✓
-pre_end   = s_ring[(14+5) % 5] = s_ring[4] = SOF0  ✓
+s_ring[0] = P1    s_ring[1] = P2    s_ring[2] = P3
+s_ring[3] = P4    s_ring[4] = SOF0
+```
+
+```
+pre_start = s_ring[r % 5]       = s_ring[15 % 5] = s_ring[0] = P1    ✓
+pre_end   = s_ring[(r-1+5) % 5] = s_ring[19 % 5] = s_ring[4] = SOF0  ✓
 ```
 
 **Result: preamble bubble spans P1 → SOF0. Correct.**
