@@ -1011,3 +1011,165 @@ The analyzer handles the flush sequence correctly without any special logic:
   edges → also invisible, `high_count` and `r` hold their current values.
 - When the preamble begins, its 4 bits plus SOF[0] fill the ring with the
   correct boundary samples.
+
+---
+
+## Capture scenarios — normal frame detection
+
+This section traces how `SyncPreamble` processes a normal FSI frame (no flush)
+in each capture scenario, and confirms the analyzer produces the correct
+preamble bubble and frame boundaries in both cases.
+
+### Scenario 1 — CLK starts LOW (MCU boots during capture)
+
+The capture begins with CLK=LOW and D0=LOW (MCU not yet configured). At some
+point the MCU configures the FSI peripheral: both CLK and D0 transition to
+HIGH (idle state). This produces **one rising edge on CLK** — the boot edge.
+CLK then stays HIGH (idle) until the first frame begins.
+
+```
+CLK: ______↑‾‾‾‾‾‾‾‾‾‾‾‾‾‾↓↑↓↑↓↑↓↑↓↑  ← preamble + SOF
+D0:  _______‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
+              boot edge
+              CLK↑, D0=HIGH
+```
+
+**D0 at the boot edge is HIGH** — both CLK and D0 settle to idle HIGH together.
+The boot edge is therefore counted as one HIGH bit and lands in slot 0 of the
+ring buffer.
+
+Edge-by-edge trace (`SyncPreamble`):
+
+| Edge | Description | D0 | high_count | r (before++) | Slot | Sample stored |
+|------|--------------|----|------------|--------------|------|---------------|
+| 1 | Boot CLK↑ | HIGH | 1 | 0 | 0 | boot |
+| — | Idle gap — no CLK edges | — | — | — | — | — |
+| 2 | P1: CLK↓ | HIGH | 2 | 1 | 1 | P1 |
+| 3 | P2: CLK↑ | HIGH | 3 | 2 | 2 | P2 |
+| 4 | P3: CLK↓ | HIGH | 4 | 3 | 3 | P3 |
+| 5 | P4: CLK↑ | HIGH | 5 | 4 | 4 | P4 |
+| 6 | SOF[0]: CLK↓ | HIGH | 6 | 5 | 0 | SOF0 ← overwrites boot |
+| 7 | SOF[1]: CLK↑ | **LOW** | — | — | SOF check triggered | |
+
+At edge 7, `high_count = 6 ≥ 5`. The SOF check reads b2 (LOW ✓) and b3
+(HIGH ✓) — frame confirmed.
+
+Ring buffer state after edge 6 (`r = 6`):
+
+```
+s_ring[0] = SOF0   (boot sample overwritten at r=5)
+s_ring[1] = P1
+s_ring[2] = P2
+s_ring[3] = P3
+s_ring[4] = P4
+```
+
+Commit calculation:
+
+```cpp
+pre_start = s_ring[r % 5]          = s_ring[6 % 5]       = s_ring[1] = P1   ✓
+pre_end   = s_ring[(r-1+5) % 5]    = s_ring[(5+5) % 5]   = s_ring[0] = SOF0 ✓
+```
+
+**Preamble bubble: P1 → SOF0. Correct.**
+
+> **What if D0 is still LOW when CLK rises at boot?**
+> Some MCU configurations may cause CLK to rise a few samples before D0 settles.
+> If D0=LOW at the boot edge, `high_count` is reset to 0 immediately, and `r`
+> resets to 0. The preamble then sees edges with `r` starting from 0 and
+> `high_count` building from 1. With only 4+1=5 preamble+SOF[0] HIGHs, the ring
+> fills slots 0–4 exactly with P1, P2, P3, P4, SOF0. At SOF[1]:
+> `r=5`, `pre_start=s_ring[0]=P1`, `pre_end=s_ring[4]=SOF0`. Still correct.
+
+### Scenario 2 — CLK starts HIGH (MCU already running)
+
+The capture begins mid-idle: CLK=HIGH, D0=HIGH. There is **no boot edge** — the
+MCU was already configured before the Saleae capture started. There is also no
+init clock pre-advance (that code was removed; see Step 2). The first
+`AdvanceToNextClockEdge` call blocks until the first real clock edge, which is
+the falling edge of preamble bit P1.
+
+```
+CLK: ‾‾‾‾‾‾‾‾‾‾‾‾‾‾↓↑↓↑↓↑↓↑↓↑  ← preamble + SOF
+D0:  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
+     ↑ capture start
+       CLK=HIGH (idle)
+```
+
+Edge-by-edge trace:
+
+| Edge | Description | D0 | high_count | r (before++) | Slot | Sample stored |
+|------|--------------|----|------------|--------------|------|---------------|
+| 1 | P1: CLK↓ | HIGH | 1 | 0 | 0 | P1 |
+| 2 | P2: CLK↑ | HIGH | 2 | 1 | 1 | P2 |
+| 3 | P3: CLK↓ | HIGH | 3 | 2 | 2 | P3 |
+| 4 | P4: CLK↑ | HIGH | 4 | 3 | 3 | P4 |
+| 5 | SOF[0]: CLK↓ | HIGH | 5 | 4 | 4 | SOF0 |
+| 6 | SOF[1]: CLK↑ | **LOW** | — | — | SOF check triggered | |
+
+At edge 6, `high_count = 5 ≥ 5`. SOF check: b2=LOW ✓, b3=HIGH ✓.
+
+Ring buffer state after edge 5 (`r = 5`):
+
+```
+s_ring[0] = P1
+s_ring[1] = P2
+s_ring[2] = P3
+s_ring[3] = P4
+s_ring[4] = SOF0
+```
+
+Commit calculation:
+
+```cpp
+pre_start = s_ring[r % 5]          = s_ring[5 % 5]       = s_ring[0] = P1   ✓
+pre_end   = s_ring[(r-1+5) % 5]    = s_ring[(4+5) % 5]   = s_ring[4] = SOF0 ✓
+```
+
+**Preamble bubble: P1 → SOF0. Correct.**
+
+The first frame is decoded identically to Scenario 1 — the ring buffer happens
+to be perfectly sized for the minimum case.
+
+### Subsequent frames (both scenarios)
+
+After each frame is decoded, `WorkerThread` calls `SyncPreamble()` again. At
+that point the postamble (4 HIGH bits on D0) has just been consumed by
+`CollectBits(4, false)`, and CLK has returned to idle (HIGH, no edges). The
+state machine is in the same position as Scenario 2 above: waiting for the
+next clock edge on an idle CLK=HIGH line.
+
+Every subsequent frame is therefore identical to the Scenario 2 trace:
+
+| Edge | Description | D0 | high_count | r (before++) | Slot | Sample |
+|------|--------------|----|------------|--------------|------|--------|
+| 1 | P1: CLK↓ | HIGH | 1 | 0 | 0 | P1 |
+| 2 | P2: CLK↑ | HIGH | 2 | 1 | 1 | P2 |
+| 3 | P3: CLK↓ | HIGH | 3 | 2 | 2 | P3 |
+| 4 | P4: CLK↑ | HIGH | 4 | 3 | 3 | P4 |
+| 5 | SOF[0]: CLK↓ | HIGH | 5 | 4 | 4 | SOF0 |
+| 6 | SOF[1]: CLK↑ | **LOW** | — | — | SOF check | |
+
+`high_count=5`, `r=5`. `pre_start=s_ring[0]=P1`, `pre_end=s_ring[4]=SOF0`. ✓
+
+`SyncPreamble` is stateless between calls (`high_count` and `s_ring` are local
+variables, re-initialized to zero on every entry), so no state leaks between
+frames.
+
+### Summary
+
+| Capture scenario | Boot edge | high_count at SOF[1] | pre_start | pre_end |
+|---|---|---|---|---|
+| Scenario 1 — CLK=LOW at start, D0=HIGH at boot edge | Counted as 1 HIGH (overwritten by SOF0) | 6 | P1 ✓ | SOF0 ✓ |
+| Scenario 1 — CLK=LOW at start, D0=LOW at boot edge | Resets counter; preamble fills ring from 0 | 5 | P1 ✓ | SOF0 ✓ |
+| Scenario 2 — CLK=HIGH at start (first frame) | None | 5 | P1 ✓ | SOF0 ✓ |
+| Any scenario — subsequent frames | None (postamble consumed, CLK idle) | 5 | P1 ✓ | SOF0 ✓ |
+
+The ring buffer correctly resolves every case:
+
+- **Extra leading HIGH** (boot edge, flush HIGHs): overwritten by SOF0 landing in
+  slot 0 before `pre_start` is computed.
+- **Exact minimum** (scenario 2, subsequent frames): ring fills slots 0–4
+  with P1..SOF0 precisely; `r%5=0` points directly at P1.
+- **No special-case code needed** for any scenario: one ring-buffer overwrite
+  mechanism handles all of them.
