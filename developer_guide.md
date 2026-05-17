@@ -6,14 +6,16 @@ This is a Saleae Logic 2 Low-Level Analyzer (LLA) plugin that decodes Texas
 Instruments Fast Serial Interface (FSI) frames. It is written in C++14 and
 built as a shared library loaded by Logic 2 at runtime.
 
------
+---
 
 ## Repository layout
 
 ```
 fsi_analyzer/
 ├── CMakeLists.txt                  — top-level build file
-├── AnalyzerSDK/                    — bundled Saleae Analyzer SDK (pre-built)
+├── CLAUDE.md                       — project overview and orientation
+├── FSIFrame.pdf                    — TI FSI TRM extract (protocol reference)
+├── AnalyzerSDK/                    — bundled Saleae Analyzer SDK (pre-built, do not modify)
 │   ├── include/                    — SDK headers
 │   │   ├── Analyzer.h              — Analyzer2 base class, UseFrameV2()
 │   │   ├── AnalyzerChannelData.h   — AnalyzerChannelData (channel reads)
@@ -22,29 +24,29 @@ fsi_analyzer/
 │   │   ├── AnalyzerSettingInterface.h — UI widget interfaces
 │   │   ├── AnalyzerHelpers.h       — GetNumberString(), etc.
 │   │   └── ...
-│   ├── lib_x86_64/                 — pre-built SDK library (Linux x86-64)
-│   │   └── libAnalyzer.so
+│   ├── lib_x86_64/                 — pre-built SDK library (Linux x86-64 / Windows x64)
 │   ├── lib_arm64/                  — pre-built SDK library (macOS arm64)
-│   │   └── libAnalyzer.dylib
 │   └── testlib/                    — SDK unit-test harness (MockChannelData, etc.)
-├── SampleAnalyzer/                 — upstream Saleae example project (reference)
+├── SampleAnalyzer/                 — upstream Saleae example project (reference only)
 ├── src/
-│   ├── FSIAnalyzer.h / .cpp        — main analyzer: WorkerThread, bit collection,
-│   │                                 preamble sync, CRC, frame emission
+│   ├── FSIAnalyzer.h / .cpp        — main analyzer: WorkerThread, SyncPreamble,
+│   │                                 CollectBits, CRC, frame emission
 │   ├── FSIAnalyzerSettings.h / .cpp — Logic 2 settings UI and serialization
 │   └── FSIAnalyzerResults.h / .cpp  — bubble text, tabular text, CSV export
-├── build/                          — CMake build output (not tracked by default)
-│   └── Analyzers/
-│       └── FSIAnalyzer.so          — the plugin loaded by Logic 2
-└── initial_deprecated_plan.md      — original design document (superseded)
+├── final_release/                  — latest built plugin binaries
+│   ├── FSIAnalyzer.so              — Linux x86-64
+│   └── FSIAnalyzer.dll             — Windows x64
+└── build/                          — CMake build output (not tracked)
+    └── Analyzers/
+        └── FSIAnalyzer.so
 ```
 
------
+---
 
 ## Architecture
 
 The plugin follows the Saleae LLA pattern: three classes derived from SDK
-base classes, plus four C-linkage entry points.
+base classes, plus three C-linkage entry points.
 
 ```
 Analyzer2        ←  FSIAnalyzer          (WorkerThread: parse bits → emit frames)
@@ -56,27 +58,40 @@ AnalyzerResults  ←  FSIAnalyzerResults   (render frames as text / CSV)
 
 ```
 Logic 2 loads .so → CreateAnalyzer() → FSIAnalyzer()
+                                         SetAnalyzerSettings()
+                                         UseFrameV2()
                   → SetupResults()
                   → WorkerThread() [runs on background thread]
-                       SyncPreamble()           — scan for ≥5 HIGH bits + SOF (1001)
-                       CollectBits(4, false)    — Frame Type (control field)
-                       [data frames only:]
-                         CollectBits(8, true)   — User Data (interleaved)
-                         CollectBits(16, true) × N — Data Words (interleaved)
-                         CollectBits(8, true)   — CRC (interleaved)
-                       CollectBits(4, false)    — Frame Tag (control field)
-                       CollectBits(4, false)    — EOF pattern (control field)
-                       CollectBits(4, false)    — Postamble (consumed silently)
-                       mResults->AddFrame() + AddFrameV2() per field
-                       mResults->CommitResults()
+                       loop:
+                         SyncPreamble()              — scan for ≥5 HIGH bits + SOF (1001)
+                                                       emits FSI_RESULT_PREAMBLE
+                         CommitPacketAndStartNewPacket()
+                         CollectBits(4, …, false)    — Frame Type (control field)
+                                                       emits FSI_RESULT_FRAME_TYPE
+                         [data frames only:]
+                           CollectBits(8, …, true)   — User Data (interleaved)
+                                                       emits FSI_RESULT_USERDATA
+                           CollectBits(16, …, true) × N — Data Words (interleaved)
+                                                       emits FSI_RESULT_DATA_WORD × N
+                           CollectBits(8, …, true)   — CRC (interleaved)
+                                                       emits FSI_RESULT_CRC
+                         CollectBits(4, …, false)    — Frame Tag (control field)
+                                                       emits FSI_RESULT_TAG
+                         CollectBits(4, …, false)    — EOF pattern (control field)
+                                                       emits FSI_RESULT_EOF or FSI_RESULT_ERROR
+                         CollectBits(4, …, false)    — Postamble (consumed silently)
+                         CommitResults()
 ```
+
+Each field calls `mResults->AddFrame()` and `mResults->AddFrameV2()` immediately
+after collection, not at the end of the frame.
 
 ### FSI frame structure (TRM Table 31-4 / §31.3.4.1)
 
 ```
-Idle        : data HIGH (indefinite)
+Idle        : CLK=HIGH, D0=HIGH, D1=HIGH — no clock edges
 Preamble    : 4 clock edges, data HIGH  (= 1111)
-SOF         : 4 bits = 1001
+SOF         : 4 bits = 1001             — detected by SyncPreamble, no bubble
 Frame Type  : 4 bits  [control field]
 [data frames only]
   User Data : 8 bits  [interleaved in 2-lane]
@@ -84,74 +99,106 @@ Frame Type  : 4 bits  [control field]
   CRC       : 8 bits  [interleaved in 2-lane]
 Frame Tag   : 4 bits  [control field]
 EOF         : 4 bits = 0110  [control field]
-Postamble   : 4 clock edges, data HIGH  (= 1111)
-Idle        : data HIGH
+Postamble   : 4 clock edges, data HIGH  (= 1111)  — consumed silently
+Idle        : CLK=HIGH, no edges
 ```
 
 ### Frame type codes (TRM Table 31-5)
 
-| Constant | Value (binary) | Frame type |
-|---|---|---|
-|`FSI_FRAME_TYPE_PING` |0000|PING — heartbeat, no data|
-|`FSI_FRAME_TYPE_NWORD`|0011|DATA(Nw) — N data words|
-|`FSI_FRAME_TYPE_DATA1`|0100|DATA(1w) — 1 data word|
-|`FSI_FRAME_TYPE_DATA2`|0101|DATA(2w) — 2 data words|
-|`FSI_FRAME_TYPE_DATA4`|0110|DATA(4w) — 4 data words|
-|`FSI_FRAME_TYPE_DATA6`|0111|DATA(6w) — 6 data words|
-|`FSI_FRAME_TYPE_ERROR`|1111|ERROR — error signalling, no data|
+| Constant | Hex | Value (binary) | Frame type |
+|---|---|---|---|
+|`FSI_FRAME_TYPE_PING` |0x0|0000|PING — heartbeat, no data|
+|`FSI_FRAME_TYPE_NWORD`|0x3|0011|DATA(Nw) — N data words (settings-configured)|
+|`FSI_FRAME_TYPE_DATA1`|0x4|0100|DATA(1w) — 1 data word|
+|`FSI_FRAME_TYPE_DATA2`|0x5|0101|DATA(2w) — 2 data words|
+|`FSI_FRAME_TYPE_DATA4`|0x6|0110|DATA(4w) — 4 data words|
+|`FSI_FRAME_TYPE_DATA6`|0x7|0111|DATA(6w) — 6 data words|
+|`FSI_FRAME_TYPE_ERROR`|0xF|1111|ERROR — error signalling, no data|
 
-All other 4-bit codes are reserved.
+All other 4-bit codes are reserved. `IsDataFrame()` returns true for NWORD,
+DATA1, DATA2, DATA4, DATA6. `DataWordCount()` returns the word count for
+each type, or 0 for PING, ERROR, and unknown codes.
 
 ### Frame result types (defined in `FSIAnalyzer.h`)
 
+Ordered as they appear in a decoded frame:
+
 | Constant | Value | Emitted for |
 |---|---|---|
-|`FSI_RESULT_PREAMBLE`  |0x00|Preamble + SOF detected|
+|`FSI_RESULT_PREAMBLE`  |0x00|Preamble + SOF detected — bubble spans preamble[0] to SOF[0]|
 |`FSI_RESULT_FRAME_TYPE`|0x01|4-bit frame type field|
-|`FSI_RESULT_USERDATA`  |0x03|8-bit user data field (data frames only)|
-|`FSI_RESULT_DATA_WORD` |0x04|Each 16-bit data word (`mData2` = word index)|
-|`FSI_RESULT_CRC`       |0x05|8-bit CRC (`mFlags & 0x01` = CRC OK)|
 |`FSI_RESULT_TAG`       |0x02|4-bit frame tag field|
+|`FSI_RESULT_USERDATA`  |0x03|8-bit user data field (data frames only)|
+|`FSI_RESULT_DATA_WORD` |0x04|Each 16-bit data word (`mData2` = zero-based word index)|
+|`FSI_RESULT_CRC`       |0x05|8-bit CRC (`mFlags` bit 0: 1=OK, 0=FAIL)|
 |`FSI_RESULT_EOF`       |0x06|EOF pattern (0110) validated|
-|`FSI_RESULT_ERROR`     |0xFF|Bad EOF pattern or framing error|
+|`FSI_RESULT_ERROR`     |0xFF|Bad EOF pattern — `mData1` holds the received value|
 
-### `mFlags` and `mData2` usage
+### `mData1`, `mData2`, and `mFlags` usage
 
-| Frame type | Field | Meaning |
-|---|---|---|
-|`FSI_RESULT_CRC`     |`mFlags` bit 0|1 = CRC matched, 0 = CRC failed|
-|`FSI_RESULT_CRC`     |`mData2`      |Computed (expected) CRC value|
-|`FSI_RESULT_DATA_WORD`|`mData2`     |Zero-based word index within frame|
+| Result type | `mData1` | `mData2` | `mFlags` |
+|---|---|---|---|
+|`FSI_RESULT_PREAMBLE`  | 0 | 0 | 0 |
+|`FSI_RESULT_FRAME_TYPE`| frame type code (0x0–0xF) | 0 | 0 |
+|`FSI_RESULT_TAG`       | tag value (0x0–0xF) | 0 | 0 |
+|`FSI_RESULT_USERDATA`  | user data byte | 0 | 0 |
+|`FSI_RESULT_DATA_WORD` | 16-bit word value | zero-based word index | 0 |
+|`FSI_RESULT_CRC`       | received CRC byte | computed (expected) CRC byte | bit 0: 1=match |
+|`FSI_RESULT_EOF`       | 0x6 | 0 | 0 |
+|`FSI_RESULT_ERROR`     | received EOF value | 0 | 0 |
+
+### Preamble detection and bubble boundaries
+
+`SyncPreamble` scans for ≥ 5 consecutive HIGH bits on D0 (4 preamble bits +
+SOF[0]), then reads ahead for SOF[1,2,3] = 0,0,1. A 5-slot ring buffer of the
+most-recent HIGH sample positions allows the preamble bubble to be placed
+precisely:
+
+- **Bubble start** (`pre_start`): `s_ring[r % 5]` — the oldest slot, always
+  the sample of preamble bit 1.
+- **Bubble end** (`pre_end`): `s_ring[(r-1+5) % 5]` — the most-recent slot,
+  always the sample of SOF[0].
+- **SOF[1,2,3]** are consumed during the look-ahead check and produce no bubble.
+  They appear as unlabeled bits between the PRE and FT bubbles on the waveform.
+
+The ring buffer overwrites the oldest entry on every new HIGH, so any number
+of preceding idle or flush HIGHs are absorbed without special-case code.
+
+**Important:** `WorkerThread` does not pre-advance the clock cursor at startup.
+FSI idle is CLK=HIGH with no clock edges, so the cursor sits idle until the
+first falling edge of the preamble. Pre-advancing would consume preamble bit 1
+and cause the first frame to be missed.
 
 ### 2-lane interleaving (`CollectBits`)
 
-`CollectBits(count, value, start, end, interleaved)` has two modes:
+```cpp
+bool CollectBits( U32 count, U64& value,
+                  U64& start_sample, U64& end_sample,
+                  bool interleaved = true );
+```
 
-**`interleaved = false`** — control fields (Frame Type, Frame Tag, EOF,
-Postamble):
-- Always consumes `count` clock edges from TXD0.
-- In 2-lane mode the TRM specifies these fields are transmitted complete and
-  identical on both lanes; reading D0 is sufficient.
+**`interleaved = false`** — control fields (Frame Type, Frame Tag, EOF, Postamble):
+- Always reads `count` edges from TXD0 only.
+- In 2-lane mode these fields are transmitted identically on both lanes; D0 suffices.
 
 **`interleaved = true`** — data fields (User Data, Data Words, CRC):
-- 1-lane: reads `count` edges from TXD0.
-- 2-lane: reads `ceil(count/2)` edges; each edge delivers TXD0 (even-position
-  bit, index 0, 2, 4 …) and TXD1 (odd-position bit, index 1, 3, 5 …)
-  simultaneously. Both are shifted into `value` MSB-first.
+- 1-lane: reads `count` edges from TXD0, MSB-first.
+- 2-lane: reads `ceil(count/2)` edges. Each edge delivers two bits simultaneously:
+  TXD0 → even-position bit (index 0, 2, 4 …), TXD1 → odd-position bit (index 1, 3, 5 …).
+  Both are shifted into `value` MSB-first within the same edge.
 
 ### CRC
 
-FSI uses CRC-8, polynomial `x^8 + x^2 + x + 1` (0x07), seed 0x00,
-no final XOR. The lookup table `kFsiCrcTable[256]` in `FSIAnalyzer.cpp`
-implements this.
+FSI uses CRC-8, polynomial `x^8 + x^2 + x + 1` (0x07), seed 0x00, no final
+XOR. The lookup table `kFsiCrcTable[256]` in `FSIAnalyzer.cpp` implements this.
 
 CRC input byte order:
 1. User Data byte (1 byte)
-2. Each data word, **LSB first then MSB** (2 bytes per word)
+2. Each data word: LSB byte first, then MSB byte (2 bytes per word)
 
 Frame Type and Frame Tag are **not** included in the CRC.
 
------
+---
 
 ## Build prerequisites
 
@@ -165,7 +212,7 @@ Frame Type and Frame Tag are **not** included in the CRC.
 The `AnalyzerSDK/` directory is bundled in the repository — no separate
 download is required.
 
------
+---
 
 ## Building
 
@@ -181,8 +228,8 @@ cmake --build .
 
 Output: `build/Analyzers/FSIAnalyzer.so`
 
-CMake auto-detects the SDK library path: it prefers `AnalyzerSDK/lib_x86_64/`
-and falls back to `AnalyzerSDK/lib/` if that directory is absent.
+CMake auto-detects the SDK library: it prefers `AnalyzerSDK/lib_x86_64/libAnalyzer.so`
+and falls back to `AnalyzerSDK/lib/libAnalyzer.so` if that path is absent.
 
 ### macOS
 
@@ -196,9 +243,8 @@ xattr -d com.apple.quarantine build/Analyzers/FSIAnalyzer.dylib
 Output: `build/Analyzers/FSIAnalyzer.dylib`
 
 > **Note:** The bundled macOS library is in `AnalyzerSDK/lib_arm64/`. If you
-> are on Intel macOS, you may need to update `SALEAE_LIB` in `CMakeLists.txt`
-> to point at an x86-64 macOS build of `libAnalyzer.dylib` from the upstream
-> Saleae SDK release.
+> are on Intel macOS, update `SALEAE_LIB` in `CMakeLists.txt` to point at an
+> x86-64 macOS build of `libAnalyzer.dylib` from the upstream Saleae SDK release.
 
 ### Windows (x64 Developer Command Prompt)
 
@@ -210,32 +256,31 @@ cmake --build . --config Release
 
 Output: `build\Analyzers\Release\FSIAnalyzer.dll`
 
-> **Note:** The bundled `AnalyzerSDK/lib_x86_64/Analyzer.lib` and
-> `Analyzer.dll` are used. Update `SALEAE_LIB` / `SALEAE_DLL` in
-> `CMakeLists.txt` if targeting ARM64 Windows.
+> **Note:** The bundled `AnalyzerSDK/lib_x86_64/Analyzer.lib` and `Analyzer.dll`
+> are used. Update `SALEAE_LIB` / `SALEAE_DLL` in `CMakeLists.txt` if targeting
+> ARM64 Windows.
 
-### Important CMake flags
+### Important CMake flag
 
 `add_definitions(-DLOGIC2)` is set unconditionally in `CMakeLists.txt`.
 This preprocessor define unlocks `FrameV2`, `AddFrameV2`, and `UseFrameV2()`
 in `AnalyzerResults.h`. Removing it will cause a build failure.
 
------
+---
 
 ## Deploying to Logic 2
 
-1. Build the plugin (see above).
+1. Build the plugin (see above) or use a pre-built binary from `final_release/`.
 2. Open **Logic 2**.
 3. Go to **Edit → Settings** and scroll to **Custom Low Level Analyzers**.
-4. Click **+** and add the path to `build/Analyzers/`.
+4. Click **+** and add the path to the folder containing the plugin file.
 5. **Restart Logic 2** — the directory is only scanned at startup.
-6. In a capture session, click **Analyzers → +** and search for
-   **TI FSI**.
+6. In a capture session, click **Analyzers → +** and search for **TI FSI**.
 
 To update after a recompile, Logic 2 must be restarted. There is no hot-reload
 mechanism for LLA plugins.
 
------
+---
 
 ## Testing
 
@@ -250,48 +295,69 @@ The Saleae SDK ships a unit-test harness in `AnalyzerSDK/testlib/`. Key types:
 No automated tests are currently wired up in this project. To add them:
 
 1. Create a `tests/` directory alongside `src/`.
-2. Add a new `CMakeLists.txt` target that links against
-   `AnalyzerSDK/testlib/` sources and your analyzer objects.
+2. Add a new `CMakeLists.txt` target that links against `AnalyzerSDK/testlib/`
+   sources and the analyzer objects.
 3. In test code, construct an `AnalyzerTest::Instance`, push synthetic clock
    and data edges via `MockChannelData`, call `RunAnalyzerWorker()`, then
    assert on `GetResults()`.
+
+The highest-value test targets are `SyncPreamble` (preamble detection across
+both capture scenarios and flush sequences), `CollectBits` (1-lane and 2-lane
+interleaving), and `ComputeCRC` (known byte vectors with expected outputs).
 
 ### Manual verification workflow
 
 1. Connect TXCLK and TXD0 (and TXD1 if 2-lane) to a Logic device running
    at ≥ 4× your FSI clock frequency.
 2. Load the plugin and add the analyzer to the capture.
-3. Inspect bubble labels: each FSI field should appear as a labelled segment
-   in the order: PRE → FT → [UD → Data words → CRC] → TAG → EOF.
-4. Check that CRC bubbles show **OK** on valid data frames.
-5. Use **Analyzers → Export** to produce a CSV and compare field values
+3. Inspect bubble labels: each FSI field should appear in order:
+   `PRE → FT → [UD → Data words → CRC] → TAG → EOF`.
+4. Note that SOF[1,2,3] produce no bubble — a small unlabeled gap between
+   PRE and FT is expected and correct.
+5. Check that CRC bubbles show **OK** on valid data frames.
+6. Use **Analyzers → Export** to produce a CSV and compare field values
    against the firmware's transmitted data.
 
------
+---
 
 ## Key source locations
 
-| What you want to change | File | Where |
+| What you want to change | File | Function / location |
 |---|---|---|
-|Preamble / SOF detection logic|`src/FSIAnalyzer.cpp`|`SyncPreamble()`|
+|Preamble / SOF detection|`src/FSIAnalyzer.cpp`|`SyncPreamble()`|
 |Bit collection (1-lane and 2-lane)|`src/FSIAnalyzer.cpp`|`CollectBits()`|
 |CRC algorithm / lookup table|`src/FSIAnalyzer.cpp`|`kFsiCrcTable`, `ComputeCRC()`|
 |Frame type → word count mapping|`src/FSIAnalyzer.cpp`|`DataWordCount()`|
 |Frame type name strings|`src/FSIAnalyzer.cpp`|`FrameTypeName()`|
+|Main decode loop|`src/FSIAnalyzer.cpp`|`WorkerThread()`|
 |Logic 2 settings UI|`src/FSIAnalyzerSettings.cpp`|Constructor|
 |Settings serialization|`src/FSIAnalyzerSettings.cpp`|`SaveSettings()`, `LoadSettings()`|
 |Bubble text rendering|`src/FSIAnalyzerResults.cpp`|`GenerateBubbleText()`|
 |Tabular text rendering|`src/FSIAnalyzerResults.cpp`|`GenerateFrameTabularText()`|
 |CSV export|`src/FSIAnalyzerResults.cpp`|`GenerateExportFile()`|
 
------
+---
+
+## Further reading
+
+| Document | What it covers |
+|---|---|
+|`state_machine.md`|Step-by-step preamble detection, ring buffer math, capture scenarios, flush sequence, full frame format and bit-level wire diagrams|
+|`user_guide.md`|End-user installation, settings reference, waveform reading, CSV export, troubleshooting|
+|`FSIFrame.pdf`|TI FSI TRM extract — authoritative protocol specification|
+
+---
 
 ## Known limitations and open work
 
 - **No automated tests.** `AnalyzerSDK/testlib/` is present but not wired to
-  any test target. Adding coverage for `CollectBits`, `ComputeCRC`, and
-  `SyncPreamble` is the highest-value starting point.
+  any test target. `SyncPreamble`, `CollectBits`, and `ComputeCRC` are the
+  highest-value starting points.
 - **`GenerateSimulationData()` is a stub** — returns 0, provides no synthetic
   waveform for offline testing inside Logic 2.
-- **N-word count** cannot be inferred from the wire. The UI dropdown must be
-  set to match `FSI_TX_FRAME_CTRL.N_WORDS` in firmware.
+- **N-word count must be set manually.** The word count for `DATA(Nw)` frames
+  cannot be determined from the wire — the UI setting must match
+  `FSI_TX_FRAME_CTRL.N_WORDS` in firmware exactly.
+- **Short inter-frame gaps may cause missed frames.** `SyncPreamble` requires
+  ≥ 5 consecutive HIGH bits before committing to a frame start. Very tight
+  back-to-back frame timing may result in frames being skipped.
