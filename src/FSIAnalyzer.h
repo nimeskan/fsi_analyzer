@@ -25,6 +25,8 @@
 #define FSI_RESULT_DATA_WORD    0x04
 #define FSI_RESULT_CRC          0x05
 #define FSI_RESULT_EOF          0x06
+#define FSI_RESULT_SOF          0x07
+#define FSI_RESULT_POSTAMBLE    0x08
 #define FSI_RESULT_ERROR        0xFF
 
 class FSIAnalyzer : public Analyzer2

@@ -75,6 +75,16 @@ void FSIAnalyzerResults::GenerateBubbleText( U64 frame_index,
         AddResultString( "End of Frame" );
         break;
 
+    case FSI_RESULT_SOF:
+        AddResultString( "SOF" );
+        AddResultString( "Start of Frame" );
+        break;
+
+    case FSI_RESULT_POSTAMBLE:
+        AddResultString( "POST" );
+        AddResultString( "Postamble" );
+        break;
+
     case FSI_RESULT_ERROR:
         AddResultString( "ERR" );
         AddResultString( "Framing Error" );
@@ -112,9 +122,11 @@ void FSIAnalyzerResults::GenerateExportFile( const char* file,
             file_stream << "CRC," << number_str << ",,"
                         << ( ( frame.mFlags & 0x01 ) ? "OK" : "FAIL" ) << ",";
             break;
-        case FSI_RESULT_EOF:   file_stream << "EOF,,,,"; break;
-        case FSI_RESULT_ERROR: file_stream << "Error,,,,"; break;
-        default:               file_stream << "Unknown,,,,"; break;
+        case FSI_RESULT_EOF:       file_stream << "EOF,,,,"; break;
+        case FSI_RESULT_SOF:       file_stream << "SOF,,,,"; break;
+        case FSI_RESULT_POSTAMBLE: file_stream << "Postamble,,,,"; break;
+        case FSI_RESULT_ERROR:     file_stream << "Error,,,,"; break;
+        default:                   file_stream << "Unknown,,,,"; break;
         }
 
         file_stream << frame.mStartingSampleInclusive << ","
@@ -167,6 +179,12 @@ void FSIAnalyzerResults::GenerateFrameTabularText( U64 frame_index,
         break;
     case FSI_RESULT_EOF:
         AddTabularText( "EOF" );
+        break;
+    case FSI_RESULT_SOF:
+        AddTabularText( "SOF" );
+        break;
+    case FSI_RESULT_POSTAMBLE:
+        AddTabularText( "Postamble" );
         break;
     case FSI_RESULT_ERROR:
         AddTabularText( "FRAMING ERROR" );

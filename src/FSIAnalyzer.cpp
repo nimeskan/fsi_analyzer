@@ -214,6 +214,7 @@ bool FSIAnalyzer::SyncPreamble( U64& frame_start_sample )
             {
                 // Read SOF[2] — must be LOW
                 BitState b2, dummy;
+                U64 sof1_sample = mClock->GetSampleNumber();  // Start of SOF[1]
                 AdvanceToNextClockEdge( b2, dummy );
 
                 if( b2 == BIT_LOW )
@@ -230,7 +231,6 @@ bool FSIAnalyzer::SyncPreamble( U64& frame_start_sample )
                         // SOF[0] is the last HIGH stored: s_ring[(r-1)%5].
                         // Preamble starts 4 edges before that:  s_ring[(r-5)%5] = s_ring[r%5].
                         // Preamble bubble ends at SOF[0] (last HIGH).
-                        // SOF[1,2,3] are consumed silently — no bubble.
                         U64 pre_start = ( r >= 5 ) ? s_ring[ r % 5 ] : s_ring[ 0 ];
                         U64 pre_end   = s_ring[ ( r - 1 + 5 ) % 5 ];   // SOF[0] sample
 
@@ -243,6 +243,17 @@ bool FSIAnalyzer::SyncPreamble( U64& frame_start_sample )
 
                         FrameV2 fv2;
                         mResults->AddFrameV2( fv2, "preamble", pre_start, pre_end );
+
+                        // Emit SOF frame (SOF[1,2,3])
+                        Frame sf;
+                        sf.mStartingSampleInclusive = sof1_sample;
+                        sf.mEndingSampleInclusive   = s3;
+                        sf.mType  = FSI_RESULT_SOF;
+                        sf.mData1 = 0; sf.mData2 = 0; sf.mFlags = 0;
+                        mResults->AddFrame( sf );
+
+                        FrameV2 sfv2;
+                        mResults->AddFrameV2( sfv2, "sof", sof1_sample, s3 );
 
                         frame_start_sample = s3;
                         return true;
@@ -408,9 +419,21 @@ void FSIAnalyzer::WorkerThread()
             mResults->AddFrameV2( fv2, eof_ok ? "eof" : "error", es, ee );
         }
 
-        // ---- Postamble (4 clocks HIGH = 1111, control field, consumed silently) ----
+        // ---- Postamble (4 clocks HIGH = 1111, control field) ----
         U64 post_val, ps, pe;
         CollectBits( 4, post_val, ps, pe, false );
+
+        {
+            Frame f;
+            f.mStartingSampleInclusive = ps;
+            f.mEndingSampleInclusive   = pe;
+            f.mType  = FSI_RESULT_POSTAMBLE;
+            f.mData1 = 0; f.mData2 = 0; f.mFlags = 0;
+            mResults->AddFrame( f );
+
+            FrameV2 fv2;
+            mResults->AddFrameV2( fv2, "postamble", ps, pe );
+        }
 
         mResults->CommitResults();
         ReportProgress( mClock->GetSampleNumber() );
