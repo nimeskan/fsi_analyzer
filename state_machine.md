@@ -1,5 +1,7 @@
 # FSI Analyzer — Packet Detection State Machine
 
+**Author:** Nima Eskandari
+
 This document walks through every step the analyzer takes from the moment
 Logic 2 starts playback to the moment a fully decoded FSI frame appears on
 screen. Each step is traced directly to the code that implements it.

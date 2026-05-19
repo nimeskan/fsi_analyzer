@@ -1,5 +1,7 @@
 # TI FSI Analyzer — Developer Guide
 
+**Author:** Nima Eskandari
+
 ## Overview
 
 This is a Saleae Logic 2 Low-Level Analyzer (LLA) plugin that decodes Texas

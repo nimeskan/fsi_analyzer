@@ -1,5 +1,7 @@
 # TI FSI Analyzer — User Guide
 
+**Author:** Nima Eskandari
+
 ## What this tool does
 
 The TI FSI analyzer decodes **Fast Serial Interface** frames produced
