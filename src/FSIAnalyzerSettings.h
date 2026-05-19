@@ -1,3 +1,7 @@
+// TI FSI Analyzer
+// Author: Nima Eskandari
+// A Saleae Logic 2 Low-Level Analyzer plugin for Texas Instruments Fast Serial Interface
+
 #pragma once
 #include <AnalyzerSettings.h>
 #include <AnalyzerTypes.h>

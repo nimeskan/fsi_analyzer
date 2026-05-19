@@ -1,5 +1,7 @@
 # TI FSI Analyzer — User Guide
 
+**Author:** Nima Eskandari
+
 ## What this tool does
 
 The TI FSI analyzer decodes **Fast Serial Interface** frames produced
@@ -169,8 +171,8 @@ Each FSI frame produces the following labelled segments on the waveform:
 
 | Label (short) | Label (expanded) | What it shows |
 |---|---|---|
-|PRE|Preamble|Preamble detected — spans preamble bits and SOF[0]|
-|SOF|Start of Frame|SOF[1..3] pattern (001) confirmed — marks the frame start|
+|PRE|Preamble|Preamble detected — 4 HIGH bits before frame start|
+|SOF|Start of Frame|SOF[0..3] pattern (1001) confirmed — marks the frame start|
 |FT|PING / ERROR / DATA(Nw) / …|Frame type decoded from the header|
 |UD|UserData: 0xNN|8-bit user data byte (data frames only)|
 |D0xNNNN|Data[n]: 0xNNNN|16-bit data word, with word index shown (data frames only)|

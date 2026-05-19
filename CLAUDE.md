@@ -1,5 +1,7 @@
 # FSI Analyzer
 
+**Author:** Nima Eskandari
+
 A Saleae Logic 2 Low-Level Analyzer (LLA) plugin that decodes Texas Instruments
 Fast Serial Interface (FSI) frames. Built as a C++14 shared library loaded by
 Logic 2 at runtime.
