@@ -64,8 +64,8 @@ Logic 2 loads .so → CreateAnalyzer() → FSIAnalyzer()
                   → WorkerThread() [runs on background thread]
                        loop:
                          SyncPreamble()              — scan for ≥5 HIGH bits + SOF (1001)
-                                                       emits FSI_RESULT_PREAMBLE (pre[0]..SOF[0])
-                                                       emits FSI_RESULT_SOF      (SOF[1]..SOF[3])
+                                                       emits FSI_RESULT_PREAMBLE (4 preamble bits)
+                                                       emits FSI_RESULT_SOF      (SOF[0]..SOF[3])
                          CommitPacketAndStartNewPacket()
                          CollectBits(4, …, false)    — Frame Type (control field)
                                                        emits FSI_RESULT_FRAME_TYPE
@@ -93,7 +93,7 @@ after collection, not at the end of the frame.
 ```
 Idle        : CLK=HIGH, D0=HIGH, D1=HIGH — no clock edges
 Preamble    : 4 clock edges, data HIGH  (= 1111)
-SOF         : 4 bits = 1001             — detected by SyncPreamble, emits FSI_RESULT_SOF (SOF[1..3])
+SOF         : 4 bits = 1001             — detected by SyncPreamble, emits FSI_RESULT_SOF (SOF[0..3])
 Frame Type  : 4 bits  [control field]
 [data frames only]
   User Data : 8 bits  [interleaved in 2-lane]
@@ -127,15 +127,15 @@ Ordered as they appear in a decoded frame:
 
 | Constant | Value | Emitted for |
 |---|---|---|
-|`FSI_RESULT_PREAMBLE`   |0x00|Preamble + SOF[0] — bubble spans preamble[0] to SOF[0]|
+|`FSI_RESULT_PREAMBLE`   |0x00|Preamble (4 HIGH bits) — bubble spans all 4 preamble bits|
 |`FSI_RESULT_FRAME_TYPE` |0x01|4-bit frame type field|
 |`FSI_RESULT_TAG`        |0x02|4-bit frame tag field|
 |`FSI_RESULT_USERDATA`   |0x03|8-bit user data field (data frames only)|
 |`FSI_RESULT_DATA_WORD`  |0x04|Each 16-bit data word (`mData2` = zero-based word index)|
 |`FSI_RESULT_CRC`        |0x05|8-bit CRC (`mFlags` bit 0: 1=OK, 0=FAIL)|
 |`FSI_RESULT_EOF`        |0x06|EOF pattern (0110) validated|
-|`FSI_RESULT_SOF`        |0x07|SOF[1..3] — bubble spans SOF[1] to SOF[3]|
-|`FSI_RESULT_POSTAMBLE`  |0x08|Postamble (1111)|
+|`FSI_RESULT_SOF`        |0x07|SOF[0..3] — bubble spans all 4 SOF bits (1001)|
+|`FSI_RESULT_POSTAMBLE`  |0x08|Postamble (4 HIGH bits)|
 |`FSI_RESULT_ERROR`      |0xFF|Bad EOF pattern — `mData1` holds the received value|
 
 ### `mData1`, `mData2`, and `mFlags` usage

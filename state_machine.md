@@ -320,12 +320,11 @@ buffer entries are used:
 - `pre_start = s_ring[r % 5]` — the ring slot written 5 HIGHs ago, which is
   preamble bit 1 (the first of the four preamble HIGH edges).
 - `pre_end = s_ring[(r-1+5) % 5]` — the ring slot written 1 HIGH ago, which
-  is SOF[0] (the HIGH that opens the SOF pattern and is visually
-  indistinguishable from the preamble on the wire).
+  is preamble bit 4 (the last of the four preamble HIGH edges).
 
-The bubble therefore covers exactly the 4 preamble HIGHs + SOF[0].
-SOF[1,2,3] (`0`, `0`, `1`) were already consumed during the peek. A
-`FSI_RESULT_SOF` (0x07) bubble is then emitted spanning SOF[1] to SOF[3].
+The bubble covers exactly the 4 preamble HIGHs.
+SOF[0,1,2,3] were consumed during the peek. A
+`FSI_RESULT_SOF` (0x07) bubble is then emitted spanning SOF[0] to SOF[3].
 
 `frame_start_sample = s3` (the SOF[3] sample) is returned to the caller
 so `WorkerThread` has a precise sample reference for the frame start, but
