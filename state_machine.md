@@ -248,6 +248,8 @@ the full SOF pattern `1 0 0 1`:
 ```cpp
             if( high_count >= 5 )
             {
+                U64 sof1_sample = mClock->GetSampleNumber();   // SOF[1] sample
+
                 // Read SOF[2] — must be LOW
                 BitState b2, dummy;
                 AdvanceToNextClockEdge( b2, dummy );
@@ -301,6 +303,16 @@ buffer entries are used:
                         FrameV2 fv2;
                         mResults->AddFrameV2( fv2, "preamble", pre_start, pre_end );
 
+                        Frame sf;
+                        sf.mStartingSampleInclusive = sof1_sample;
+                        sf.mEndingSampleInclusive   = s3;
+                        sf.mType  = FSI_RESULT_SOF;
+                        sf.mData1 = 0; sf.mData2 = 0; sf.mFlags = 0;
+                        mResults->AddFrame( sf );
+
+                        FrameV2 sfv2;
+                        mResults->AddFrameV2( sfv2, "sof", sof1_sample, s3 );
+
                         frame_start_sample = s3;
                         return true;
 ```
@@ -312,9 +324,8 @@ buffer entries are used:
   indistinguishable from the preamble on the wire).
 
 The bubble therefore covers exactly the 4 preamble HIGHs + SOF[0].
-SOF[1,2,3] (`0`, `0`, `1`) were already consumed during the peek and are
-silently discarded — they appear as unlabeled bits between the PRE bubble
-and the FT bubble in the Logic 2 waveform view.
+SOF[1,2,3] (`0`, `0`, `1`) were already consumed during the peek. A
+`FSI_RESULT_SOF` (0x07) bubble is then emitted spanning SOF[1] to SOF[3].
 
 `frame_start_sample = s3` (the SOF[3] sample) is returned to the caller
 so `WorkerThread` has a precise sample reference for the frame start, but
@@ -680,9 +691,9 @@ the frame.
         CollectBits( 4, post_val, ps, pe, false );
 ```
 
-The postamble is four clock edges with data HIGH. It is consumed silently —
-no frame or bubble is emitted for it. Its only purpose is to let the
-transmitter drive the lines back to idle before the next frame begins.
+The postamble is four clock edges with data HIGH. A `FSI_RESULT_POSTAMBLE`
+(0x08) bubble is emitted for it. Its only purpose is to let the transmitter
+drive the lines back to idle before the next frame begins.
 
 ---
 
@@ -723,6 +734,12 @@ state machine repeats for the next frame.
                          ┌─────────────────────────────────────────┐
                          │           PREAMBLE BUBBLE EMITTED        │
                          │  Spans from preamble[0] to SOF[0]        │
+                         └──────────────────┬──────────────────────┘
+                                            │
+                                            ▼
+                         ┌─────────────────────────────────────────┐
+                         │           SOF BUBBLE EMITTED             │
+                         │  Spans SOF[1] to SOF[3] (0x07)          │
                          └──────────────────┬──────────────────────┘
                                             │
                                             ▼
@@ -774,7 +791,7 @@ state machine repeats for the next frame.
                                             ▼
                          ┌─────────────────────────────────────────┐
                          │   POSTAMBLE — CollectBits(4, false)      │
-                         │   Consumed silently (no bubble)          │
+                         │   Emits FSI_RESULT_POSTAMBLE (0x08)      │
                          └──────────────────┬──────────────────────┘
                                             │
                                             ▼
@@ -1183,8 +1200,8 @@ for it implicitly by counting consecutive HIGH bits until the count reaches
 
 **Saleae result:** `FSI_RESULT_PREAMBLE` (0x00). `mData1=0, mData2=0,
 mFlags=0`. Bubble spans from P1 sample to SOF[0] sample. SOF[1,2,3] are
-consumed silently — they appear as unlabeled bits between the PRE and FT
-bubbles.
+emitted as a separate `FSI_RESULT_SOF` (0x07) bubble spanning SOF[1] to
+SOF[3].
 
 ---
 
@@ -1206,7 +1223,10 @@ detects it as part of `SyncPreamble`:
 - SOF[3] = 1 (HIGH): read as `b3`, confirmed HIGH. Frame start confirmed.
   `frame_start_sample = s3` (the sample number of SOF[3]).
 
-SOF is never emitted as its own Saleae frame. It is validated then discarded.
+**Saleae result:** `FSI_RESULT_SOF` (0x07). `mData1=0, mData2=0, mFlags=0`.
+Bubble spans from SOF[1] sample to SOF[3] sample. Bubble label: `"SOF"`
+(short) or `"Start of Frame"` (expanded). Emitted immediately after the
+preamble bubble inside `SyncPreamble`.
 
 ---
 
@@ -1393,8 +1413,11 @@ Fixed pattern 1111 (all HIGH, mirrors preamble):
 D0: 1  1  1  1
 ```
 
-Collected by `CollectBits(4, post_val, ps, pe, false)` at line 413 but the
-collected value is **never validated and never emitted** as a Saleae frame.
+Collected by `CollectBits(4, post_val, ps, pe, false)` at line 413. The
+collected value is not validated.
+
+**Saleae result:** `FSI_RESULT_POSTAMBLE` (0x08). `mData1=0, mData2=0,
+mFlags=0`. Bubble label: `"POST"` (short) or `"Postamble"` (expanded).
 The postamble's purpose is to drive lines back to idle HIGH before CLK
 stops. After this collection, `CommitResults()` is called and the loop
 returns to `SyncPreamble` for the next frame.
@@ -1431,13 +1454,13 @@ Total bits: 4+4+4+4+4+4 = 24 clock edges
   1  1  1  1   1  0  0  1   0  0  0  0   t  t  t  t   0  1  1  0   1  1  1  1
  [P1][P2][P3][P4][S0][S1][S2][S3][f3][f2][f1][f0][g3][g2][g1][g0][e3][e2][e1][e0][q3][q2][q1][q0]
 
-S1,S2,S3 = SOF[1,2,3] consumed silently (no bubble)
+S1,S2,S3 = SOF[1,2,3] emitted as SOF bubble (FSI_RESULT_SOF, 0x07)
 FT = 0000 (PING)
 TAG = user-defined 4-bit value (shown as t)
 EOF = 0110
 ```
 
-Saleae bubbles emitted in order: `PRE | PING | TAG | EOF`
+Saleae bubbles emitted in order: `PRE | SOF | PING | TAG | EOF | POST`
 
 ---
 
@@ -1452,7 +1475,7 @@ Total bits: 4+4+4+4+4+4 = 24 clock edges
                              FT = 1111 (ERROR)
 ```
 
-Saleae bubbles: `PRE | ERROR | TAG | EOF`
+Saleae bubbles: `PRE | SOF | ERROR | TAG | EOF | POST`
 
 ---
 
@@ -1465,7 +1488,7 @@ Total bits: 4+4 + 4 + 8 + 16 + 8 + 4 + 4 + 4 = 56 clock edges
   1111  1001   0100   ud7 ud6 ud5 ud4 ud3 ud2 ud1 ud0   w15 w14 w13 ... w1 w0   c7 c6 c5 c4 c3 c2 c1 c0   tttt   0110   1111
 ```
 
-Saleae bubbles: `PRE | DATA(1w) | UD | D[0] | CRC | TAG | EOF`
+Saleae bubbles: `PRE | SOF | DATA(1w) | UD | D[0] | CRC | TAG | EOF | POST`
 
 ---
 
@@ -1504,7 +1527,7 @@ CRC (4 edges, interleaved):
   D1:        c6    c4    c2    c0
 ```
 
-Saleae bubbles: `PRE | DATA(2w) | UD | D[0] | D[1] | CRC | TAG | EOF`
+Saleae bubbles: `PRE | SOF | DATA(2w) | UD | D[0] | D[1] | CRC | TAG | EOF | POST`
 
 ---
 
@@ -1515,11 +1538,13 @@ All fields stored using `mResults->AddFrame()` (legacy V1) and
 
 | FSI_RESULT_* | mType | mData1 | mData2 | mFlags |
 |---|---|---|---|---|
-| PREAMBLE   (0x00) | 0x00 | 0 | 0 | 0 |
-| FRAME_TYPE (0x01) | 0x01 | frame type code (0x0–0xF) | 0 | 0 |
-| TAG        (0x02) | 0x02 | tag value (0x0–0xF) | 0 | 0 |
-| USERDATA   (0x03) | 0x03 | user data byte (0x00–0xFF) | 0 | 0 |
-| DATA_WORD  (0x04) | 0x04 | 16-bit word value | word index (0-based) | 0 |
-| CRC        (0x05) | 0x05 | received CRC byte | computed CRC byte | bit 0: 1=OK 0=FAIL |
-| EOF        (0x06) | 0x06 | 0x6 | 0 | 0 |
-| ERROR      (0xFF) | 0xFF | received EOF value (≠ 0x6) | 0 | 0 |
+| PREAMBLE    (0x00) | 0x00 | 0 | 0 | 0 |
+| FRAME_TYPE  (0x01) | 0x01 | frame type code (0x0–0xF) | 0 | 0 |
+| TAG         (0x02) | 0x02 | tag value (0x0–0xF) | 0 | 0 |
+| USERDATA    (0x03) | 0x03 | user data byte (0x00–0xFF) | 0 | 0 |
+| DATA_WORD   (0x04) | 0x04 | 16-bit word value | word index (0-based) | 0 |
+| CRC         (0x05) | 0x05 | received CRC byte | computed CRC byte | bit 0: 1=OK 0=FAIL |
+| EOF         (0x06) | 0x06 | 0x6 | 0 | 0 |
+| SOF         (0x07) | 0x07 | 0 | 0 | 0 |
+| POSTAMBLE   (0x08) | 0x08 | 0 | 0 | 0 |
+| ERROR       (0xFF) | 0xFF | received EOF value (≠ 0x6) | 0 | 0 |

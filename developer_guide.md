@@ -64,7 +64,8 @@ Logic 2 loads .so → CreateAnalyzer() → FSIAnalyzer()
                   → WorkerThread() [runs on background thread]
                        loop:
                          SyncPreamble()              — scan for ≥5 HIGH bits + SOF (1001)
-                                                       emits FSI_RESULT_PREAMBLE
+                                                       emits FSI_RESULT_PREAMBLE (pre[0]..SOF[0])
+                                                       emits FSI_RESULT_SOF      (SOF[1]..SOF[3])
                          CommitPacketAndStartNewPacket()
                          CollectBits(4, …, false)    — Frame Type (control field)
                                                        emits FSI_RESULT_FRAME_TYPE
@@ -79,7 +80,8 @@ Logic 2 loads .so → CreateAnalyzer() → FSIAnalyzer()
                                                        emits FSI_RESULT_TAG
                          CollectBits(4, …, false)    — EOF pattern (control field)
                                                        emits FSI_RESULT_EOF or FSI_RESULT_ERROR
-                         CollectBits(4, …, false)    — Postamble (consumed silently)
+                         CollectBits(4, …, false)    — Postamble
+                                                       emits FSI_RESULT_POSTAMBLE
                          CommitResults()
 ```
 
@@ -91,7 +93,7 @@ after collection, not at the end of the frame.
 ```
 Idle        : CLK=HIGH, D0=HIGH, D1=HIGH — no clock edges
 Preamble    : 4 clock edges, data HIGH  (= 1111)
-SOF         : 4 bits = 1001             — detected by SyncPreamble, no bubble
+SOF         : 4 bits = 1001             — detected by SyncPreamble, emits FSI_RESULT_SOF (SOF[1..3])
 Frame Type  : 4 bits  [control field]
 [data frames only]
   User Data : 8 bits  [interleaved in 2-lane]
@@ -99,7 +101,7 @@ Frame Type  : 4 bits  [control field]
   CRC       : 8 bits  [interleaved in 2-lane]
 Frame Tag   : 4 bits  [control field]
 EOF         : 4 bits = 0110  [control field]
-Postamble   : 4 clock edges, data HIGH  (= 1111)  — consumed silently
+Postamble   : 4 clock edges, data HIGH  (= 1111)  — emits FSI_RESULT_POSTAMBLE
 Idle        : CLK=HIGH, no edges
 ```
 
@@ -125,27 +127,31 @@ Ordered as they appear in a decoded frame:
 
 | Constant | Value | Emitted for |
 |---|---|---|
-|`FSI_RESULT_PREAMBLE`  |0x00|Preamble + SOF detected — bubble spans preamble[0] to SOF[0]|
-|`FSI_RESULT_FRAME_TYPE`|0x01|4-bit frame type field|
-|`FSI_RESULT_TAG`       |0x02|4-bit frame tag field|
-|`FSI_RESULT_USERDATA`  |0x03|8-bit user data field (data frames only)|
-|`FSI_RESULT_DATA_WORD` |0x04|Each 16-bit data word (`mData2` = zero-based word index)|
-|`FSI_RESULT_CRC`       |0x05|8-bit CRC (`mFlags` bit 0: 1=OK, 0=FAIL)|
-|`FSI_RESULT_EOF`       |0x06|EOF pattern (0110) validated|
-|`FSI_RESULT_ERROR`     |0xFF|Bad EOF pattern — `mData1` holds the received value|
+|`FSI_RESULT_PREAMBLE`   |0x00|Preamble + SOF[0] — bubble spans preamble[0] to SOF[0]|
+|`FSI_RESULT_FRAME_TYPE` |0x01|4-bit frame type field|
+|`FSI_RESULT_TAG`        |0x02|4-bit frame tag field|
+|`FSI_RESULT_USERDATA`   |0x03|8-bit user data field (data frames only)|
+|`FSI_RESULT_DATA_WORD`  |0x04|Each 16-bit data word (`mData2` = zero-based word index)|
+|`FSI_RESULT_CRC`        |0x05|8-bit CRC (`mFlags` bit 0: 1=OK, 0=FAIL)|
+|`FSI_RESULT_EOF`        |0x06|EOF pattern (0110) validated|
+|`FSI_RESULT_SOF`        |0x07|SOF[1..3] — bubble spans SOF[1] to SOF[3]|
+|`FSI_RESULT_POSTAMBLE`  |0x08|Postamble (1111)|
+|`FSI_RESULT_ERROR`      |0xFF|Bad EOF pattern — `mData1` holds the received value|
 
 ### `mData1`, `mData2`, and `mFlags` usage
 
 | Result type | `mData1` | `mData2` | `mFlags` |
 |---|---|---|---|
-|`FSI_RESULT_PREAMBLE`  | 0 | 0 | 0 |
-|`FSI_RESULT_FRAME_TYPE`| frame type code (0x0–0xF) | 0 | 0 |
-|`FSI_RESULT_TAG`       | tag value (0x0–0xF) | 0 | 0 |
-|`FSI_RESULT_USERDATA`  | user data byte | 0 | 0 |
-|`FSI_RESULT_DATA_WORD` | 16-bit word value | zero-based word index | 0 |
-|`FSI_RESULT_CRC`       | received CRC byte | computed (expected) CRC byte | bit 0: 1=match |
-|`FSI_RESULT_EOF`       | 0x6 | 0 | 0 |
-|`FSI_RESULT_ERROR`     | received EOF value | 0 | 0 |
+|`FSI_RESULT_PREAMBLE`   | 0 | 0 | 0 |
+|`FSI_RESULT_FRAME_TYPE` | frame type code (0x0–0xF) | 0 | 0 |
+|`FSI_RESULT_TAG`        | tag value (0x0–0xF) | 0 | 0 |
+|`FSI_RESULT_USERDATA`   | user data byte | 0 | 0 |
+|`FSI_RESULT_DATA_WORD`  | 16-bit word value | zero-based word index | 0 |
+|`FSI_RESULT_CRC`        | received CRC byte | computed (expected) CRC byte | bit 0: 1=match |
+|`FSI_RESULT_EOF`        | 0x6 | 0 | 0 |
+|`FSI_RESULT_SOF`        | 0 | 0 | 0 |
+|`FSI_RESULT_POSTAMBLE`  | 0 | 0 | 0 |
+|`FSI_RESULT_ERROR`      | received EOF value | 0 | 0 |
 
 ### Preamble detection and bubble boundaries
 
@@ -158,8 +164,9 @@ precisely:
   the sample of preamble bit 1.
 - **Bubble end** (`pre_end`): `s_ring[(r-1+5) % 5]` — the most-recent slot,
   always the sample of SOF[0].
-- **SOF[1,2,3]** are consumed during the look-ahead check and produce no bubble.
-  They appear as unlabeled bits between the PRE and FT bubbles on the waveform.
+- **SOF[1,2,3]** are consumed during the look-ahead check. A `FSI_RESULT_SOF`
+  (0x07) bubble is emitted immediately after the preamble bubble, spanning
+  SOF[1] to SOF[3].
 
 The ring buffer overwrites the oldest entry on every new HIGH, so any number
 of preceding idle or flush HIGHs are absorbed without special-case code.
@@ -311,9 +318,9 @@ interleaving), and `ComputeCRC` (known byte vectors with expected outputs).
    at ≥ 4× your FSI clock frequency.
 2. Load the plugin and add the analyzer to the capture.
 3. Inspect bubble labels: each FSI field should appear in order:
-   `PRE → FT → [UD → Data words → CRC] → TAG → EOF`.
-4. Note that SOF[1,2,3] produce no bubble — a small unlabeled gap between
-   PRE and FT is expected and correct.
+   `PRE → SOF → FT → [UD → Data words → CRC] → TAG → EOF → POST`.
+4. Confirm the `SOF` bubble appears between `PRE` and `FT`, and the `POST`
+   bubble appears at the end of each frame after `EOF`.
 5. Check that CRC bubbles show **OK** on valid data frames.
 6. Use **Analyzers → Export** to produce a CSV and compare field values
    against the firmware's transmitted data.
